@@ -2,8 +2,8 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>学祭POSシステム</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>学祭POSシステム（返金・取消対応＆取扱説明書付き版）</title>
   
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -12,10 +12,10 @@
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   
-  <!-- Babel (ブラウザ上でJSXをコンパイル) -->
+  <!-- Babel (ブラウザ上でJSXを即時コンパイル) -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-  <!-- importmap: Lucide IconsをCDNから読み込むための設定 -->
+  <!-- Lucide Icons CDN設定 -->
   <script type="importmap">
     {
       "imports": {
@@ -23,49 +23,214 @@
       }
     }
   </script>
+  <style>
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fade-in-up {
+      animation: fadeInUp 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    /* モバイルのタップ時ハイライト除去 */
+    * { -webkit-tap-highlight-color: transparent; }
+    /* スクロールバーのスタイリング */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(241, 245, 249, 0.8);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(203, 213, 225, 0.9);
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(148, 163, 184, 0.9);
+    }
+  </style>
 </head>
-<body class="bg-gray-100 font-sans text-gray-800">
+<body class="bg-slate-100 font-sans text-slate-800 select-none antialiased">
   
   <div id="root"></div>
 
-  <!-- アプリのコード (Babelで変換) -->
   <script type="text/babel" data-type="module">
     import { 
       ShoppingCart, BarChart3, Settings, Calculator, 
       Trash2, Plus, Minus, Check, X, AlertCircle, 
-      Trophy, Target, Clock, Coins, Download, Edit2, Image as ImageIcon,
-      Store, ClipboardCheck, User, Undo2
+      Trophy, Target, Clock, Coins, Download, Upload, Edit2, Image as ImageIcon,
+      Store, ClipboardCheck, User, Undo2, Sparkles, Package, ChevronUp, ChevronDown, 
+      RefreshCw, RotateCcw, AlertTriangle, ArrowRight, CornerDownLeft, BookOpen,
+      HelpCircle, FileText, CheckCircle2, ShieldAlert
     } from 'lucide-react';
     
-    const { useState, useEffect, useMemo } = React;
+    const { useState, useEffect, useMemo, useRef } = React;
 
-    // --- 初期データ（空の状態からスタート） ---
-    const initialItems = [];
-    const initialStaff = [];
+    const STORAGE_KEY = 'festival_pos_state_v3';
+    const safeStorage = {
+      get: (key) => {
+        try {
+          const raw = localStorage.getItem(key);
+          return raw ? JSON.parse(raw) : null;
+        } catch (e) {
+          console.error('Storage read error:', e);
+          return null;
+        }
+      },
+      set: (key, val) => {
+        try {
+          localStorage.setItem(key, JSON.stringify(val));
+          return true;
+        } catch (e) {
+          console.error('Storage write error:', e);
+          return false;
+        }
+      },
+      remove: (key) => {
+        try { localStorage.removeItem(key); } catch (e) { /* ignore */ }
+      }
+    };
 
-    // --- メインコンポーネント ---
+    // 画像ファイル圧縮関数（localStorage容量パンクを防止）
+    const compressImageFile = (file, maxSize = 240, quality = 0.75) => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            let width = img.width;
+            let height = img.height;
+            if (width > height) {
+              if (width > maxSize) {
+                height = Math.round((height * maxSize) / width);
+                width = maxSize;
+              }
+            } else {
+              if (height > maxSize) {
+                width = Math.round((width * maxSize) / height);
+                height = maxSize;
+              }
+            }
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL('image/jpeg', quality));
+          };
+          img.onerror = reject;
+          img.src = e.target.result;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    };
+
+    const EMPTY_CASH_COUNTS = {
+      c10000: '', c5000: '', c1000: '', c500: '', c100: '', c50: '', c10: '', c5: '', c1: ''
+    };
+
+    const SAMPLE_ITEMS = [
+      { id: 101, name: '特製焼きそば', price: 400, stock: 80, category: 'フード', flavors: ['ソース', '塩ダレ', '旨辛'], _rawFlavors: 'ソース、塩ダレ、旨辛', image: null },
+      { id: 102, name: 'フランクフルト', price: 250, stock: 60, category: 'フード', flavors: ['ケチャップ&マスタード', 'ケチャップのみ', 'なし'], _rawFlavors: 'ケチャップ&マスタード、ケチャップのみ、なし', image: null },
+      { id: 103, name: 'シャカシャカポテト', price: 300, stock: 50, category: 'サイド', flavors: ['コンソメ', 'バター醤油', 'チーズ'], _rawFlavors: 'コンソメ、バター醤油、チーズ', image: null },
+      { id: 104, name: 'ラムネ・ドリンク', price: 200, stock: 100, category: 'ドリンク', flavors: ['ラムネ', 'コーラ', 'オレンジ', 'お茶'], _rawFlavors: 'ラムネ、コーラ、オレンジ、お茶', image: null }
+    ];
+
+    const REFUND_REASONS = [
+      'レジ打ち間違い・注文重複',
+      'お客様都合の注文変更・キャンセル',
+      '商品の品切れ・渡し間違い',
+      '商品不良・容器の汚れや破損',
+      'その他'
+    ];
+
     function App() {
+      const [isLoaded, setIsLoaded] = useState(false);
       const [activeTab, setActiveTab] = useState('register');
-      const [items, setItems] = useState(initialItems);
-      const [cart, setCart] = useState([]);
+      const [selectedCategory, setSelectedCategory] = useState('すべて');
+
+      // 永続化ステート
+      const [items, setItems] = useState([]);
       const [salesHistory, setSalesHistory] = useState([]);
-      const [staff, setStaff] = useState(initialStaff);
-      const [currentStaff, setCurrentStaff] = useState(initialStaff[0] || '');
-      const [goalAmount, setGoalAmount] = useState(0);
-      
-      const [startCashCounts, setStartCashCounts] = useState({
-        c10000: '', c5000: '', c1000: '', c500: '', c100: '', c50: '', c10: ''
+      const [staff, setStaff] = useState([]);
+      const [currentStaff, setCurrentStaff] = useState('');
+      const [goalAmount, setGoalAmount] = useState(50000);
+      const [startCashCounts, setStartCashCounts] = useState(EMPTY_CASH_COUNTS);
+      const [endCashCounts, setEndCashCounts] = useState(EMPTY_CASH_COUNTS);
+      const [luckyConfig, setLuckyConfig] = useState({
+        enabled: true,
+        interval: 10,
+        triggeredMilestones: []
       });
-      const [endCashCounts, setEndCashCounts] = useState({
-        c10000: '', c5000: '', c1000: '', c500: '', c100: '', c50: '', c10: ''
-      });
+
+      // UI・モーダル制御ステート
+      const [cart, setCart] = useState([]);
+      const [mobileCartOpen, setMobileCartOpen] = useState(false);
+      const [toast, setToast] = useState(null);
 
       const [flavorModal, setFlavorModal] = useState({ isOpen: false, item: null });
       const [checkoutModal, setCheckoutModal] = useState({ isOpen: false, received: '' });
       const [luckyModal, setLuckyModal] = useState({ isOpen: false, message: '' });
-      const [cancelModal, setCancelModal] = useState({ isOpen: false, sale: null });
       const [discountModal, setDiscountModal] = useState({ isOpen: false, amount: '' });
-      const [lastDiscountAmount, setLastDiscountAmount] = useState('');
+      const [helpModalOpen, setHelpModalOpen] = useState(false);
+      const [lastDiscountAmount, setLastDiscountAmount] = useState('50');
+      const [csvFileName, setCsvFileName] = useState('学祭売上データ');
+
+      // 返金・取消総合モーダル用ステート
+      const [refundModal, setRefundModal] = useState({
+        isOpen: false,
+        sale: null,
+        mode: 'full', // 'full' (全額取消) または 'partial' (一部返品)
+        returnQuantities: {}, // { [cartItemId]: number }
+        restock: true,       // 在庫を元に戻すか
+        reason: REFUND_REASONS[0],
+        customReason: ''
+      });
+
+      const showToast = (message, type = 'info') => {
+        setToast({ message, type, id: Date.now() });
+      };
+
+      useEffect(() => {
+        if (!toast) return;
+        const timer = setTimeout(() => setToast(null), 3600);
+        return () => clearTimeout(timer);
+      }, [toast]);
+
+      useEffect(() => {
+        const saved = safeStorage.get(STORAGE_KEY) || safeStorage.get('festival_pos_state_v2');
+        if (saved) {
+          if (Array.isArray(saved.items)) setItems(saved.items);
+          if (Array.isArray(saved.salesHistory)) setSalesHistory(saved.salesHistory);
+          if (Array.isArray(saved.staff)) setStaff(saved.staff);
+          if (saved.currentStaff !== undefined) setCurrentStaff(saved.currentStaff);
+          if (typeof saved.goalAmount === 'number') setGoalAmount(saved.goalAmount);
+          if (saved.startCashCounts) setStartCashCounts({ ...EMPTY_CASH_COUNTS, ...saved.startCashCounts });
+          if (saved.endCashCounts) setEndCashCounts({ ...EMPTY_CASH_COUNTS, ...saved.endCashCounts });
+          if (saved.luckyConfig) setLuckyConfig({ enabled: true, interval: 10, triggeredMilestones: [], ...saved.luckyConfig });
+        }
+        setIsLoaded(true);
+      }, []);
+
+      useEffect(() => {
+        if (!isLoaded) return;
+        const success = safeStorage.set(STORAGE_KEY, {
+          version: '3.1',
+          updatedAt: new Date().toISOString(),
+          items,
+          salesHistory,
+          staff,
+          currentStaff,
+          goalAmount,
+          startCashCounts,
+          endCashCounts,
+          luckyConfig
+        });
+        if (!success) {
+          showToast('ブラウザの保存容量上限に近づいています。不要な画像を整理してください。', 'error');
+        }
+      }, [items, salesHistory, staff, currentStaff, goalAmount, startCashCounts, endCashCounts, luckyConfig, isLoaded]);
 
       useEffect(() => {
         if (staff.length > 0 && !staff.includes(currentStaff)) {
@@ -75,8 +240,35 @@
         }
       }, [staff, currentStaff]);
 
+      const cartQtyByItemId = useMemo(() => {
+        const map = {};
+        cart.forEach(c => {
+          if (!c.isDiscount && c.id !== undefined) {
+            map[c.id] = (map[c.id] || 0) + (c.quantity || 1);
+          }
+        });
+        return map;
+      }, [cart]);
+
+      const getAvailableStock = (item) => {
+        const maxStock = Number(item.stock) || 0;
+        const inCart = cartQtyByItemId[item.id] || 0;
+        return Math.max(0, maxStock - inCart);
+      };
+
+      const categories = useMemo(() => {
+        const cats = new Set(['すべて']);
+        items.forEach(i => {
+          if (i.category && i.category.trim()) cats.add(i.category.trim());
+        });
+        return Array.from(cats);
+      }, [items]);
+
       const handleItemClick = (item) => {
-        if (item.stock <= 0) return;
+        if (getAvailableStock(item) <= 0) {
+          showToast(`「${item.name}」は在庫上限までカートに入っています`, 'error');
+          return;
+        }
         if (item.flavors && item.flavors.length > 0) {
           setFlavorModal({ isOpen: true, item });
         } else {
@@ -85,140 +277,492 @@
       };
 
       const addToCart = (item, flavor) => {
-        const cartItemId = Date.now().toString();
-        setCart([...cart, { ...item, cartItemId, selectedFlavor: flavor, isDiscount: false }]);
+        if (getAvailableStock(item) <= 0) {
+          showToast(`「${item.name}」の在庫が足りません`, 'error');
+          setFlavorModal({ isOpen: false, item: null });
+          return;
+        }
+
+        setCart(prevCart => {
+          const existingIndex = prevCart.findIndex(
+            c => !c.isDiscount && c.id === item.id && (c.selectedFlavor || null) === (flavor || null)
+          );
+          if (existingIndex > -1) {
+            const updated = [...prevCart];
+            updated[existingIndex] = {
+              ...updated[existingIndex],
+              quantity: (updated[existingIndex].quantity || 1) + 1
+            };
+            return updated;
+          } else {
+            return [
+              ...prevCart,
+              {
+                ...item,
+                price: Number(item.price) || 0,
+                cartItemId: `${item.id}-${flavor || 'default'}-${Date.now()}`,
+                selectedFlavor: flavor,
+                quantity: 1,
+                returnedQuantity: 0,
+                isDiscount: false
+              }
+            ];
+          }
+        });
         setFlavorModal({ isOpen: false, item: null });
       };
 
-      const removeFromCart = (cartItemId) => setCart(cart.filter(item => item.cartItemId !== cartItemId));
+      const updateCartQuantity = (cartItemId, delta) => {
+        setCart(prevCart => {
+          return prevCart.map(cItem => {
+            if (cItem.cartItemId !== cartItemId) return cItem;
+            const newQty = (cItem.quantity || 1) + delta;
+            if (newQty <= 0) return null;
+
+            if (delta > 0 && !cItem.isDiscount) {
+              const originalItem = items.find(i => i.id === cItem.id);
+              if (originalItem) {
+                const currentInCartTotal = cartQtyByItemId[cItem.id] || 0;
+                if (currentInCartTotal + delta > (Number(originalItem.stock) || 0)) {
+                  showToast(`「${cItem.name}」の在庫上限（残${originalItem.stock}）に達しています`, 'error');
+                  return cItem;
+                }
+              }
+            }
+            return { ...cItem, quantity: newQty };
+          }).filter(Boolean);
+        });
+      };
+
+      const removeFromCart = (cartItemId) => {
+        setCart(cart.filter(item => item.cartItemId !== cartItemId));
+      };
 
       const applyDiscount = () => {
         const amountNum = Number(discountModal.amount);
         if (amountNum > 0) {
           const discountItem = {
-            cartItemId: Date.now().toString(),
-            name: '割引',
+            cartItemId: `discount-${Date.now()}`,
+            name: '値引き・サービス',
             price: -amountNum,
+            quantity: 1,
+            returnedQuantity: 0,
             isDiscount: true,
             category: '割引'
           };
           setCart([...cart, discountItem]);
-          setLastDiscountAmount(discountModal.amount);
+          setLastDiscountAmount(String(amountNum));
           setDiscountModal({ ...discountModal, isOpen: false });
+          showToast(`¥${amountNum.toLocaleString()} の値引きを適用しました`, 'success');
         }
       };
 
-      const cartTotal = cart.reduce((sum, item) => sum + item.price, 0);
+      const cartTotal = useMemo(() => {
+        const raw = cart.reduce((sum, item) => sum + (Number(item.price) || 0) * (item.quantity || 1), 0);
+        return Math.max(0, raw);
+      }, [cart]);
+
+      const cartTotalCount = useMemo(() => {
+        return cart.reduce((sum, item) => sum + (item.isDiscount ? 0 : (item.quantity || 1)), 0);
+      }, [cart]);
 
       const openCheckout = () => {
         if (cart.length === 0) return;
+        setMobileCartOpen(false);
         setCheckoutModal({ isOpen: true, received: '' });
       };
 
       const processCheckout = () => {
-        if (!currentStaff) {
-          alert("担当者が設定されていません！設定画面からスタッフを追加してください。");
-          return;
-        }
         const receivedNum = Number(checkoutModal.received) || 0;
         if (receivedNum < cartTotal) {
-          alert("お預かり金額が足りません！");
+          showToast('お預かり金額が合計金額に足りていません', 'error');
           return;
         }
+
+        const staffName = currentStaff || '担当者未設定';
+        const nowIso = new Date().toISOString();
+
         const newSale = {
           id: Date.now(),
-          time: new Date(),
-          items: [...cart],
+          timeIso: nowIso,
+          items: cart.map(c => ({ ...c, returnedQuantity: 0 })),
           total: cartTotal,
-          staff: currentStaff
+          received: receivedNum,
+          change: receivedNum - cartTotal,
+          staff: staffName,
+          status: 'valid', // 'valid', 'cancelled', 'partially_refunded'
+          isCancelled: false,
+          refundAmount: 0,
+          cancelReason: '',
+          refundEvents: []
         };
+
+        // 在庫減算
         const updatedItems = items.map(item => {
-          const soldCount = cart.filter(c => c.id === item.id).length;
-          return { ...item, stock: Math.max(0, item.stock - soldCount) };
+          const soldCount = cartQtyByItemId[item.id] || 0;
+          if (soldCount > 0) {
+            return { ...item, stock: Math.max(0, (Number(item.stock) || 0) - soldCount) };
+          }
+          return item;
         });
+
+        const nextHistory = [...salesHistory, newSale];
+        const nextValidCount = nextHistory.filter(s => !s.isCancelled && s.status !== 'cancelled').length;
+
         setItems(updatedItems);
-        setSalesHistory([...salesHistory, newSale]);
+        setSalesHistory(nextHistory);
         setCart([]);
         setCheckoutModal({ isOpen: false, received: '' });
+        showToast(`会計完了！ お釣り: ¥${(receivedNum - cartTotal).toLocaleString()}`, 'success');
 
-        if ((salesHistory.length + 1) % 5 === 0) {
-          setLuckyModal({ isOpen: true, message: `🎊おめでとうございます！🎊\n本日 ${salesHistory.length + 1} 人目のお客様です！\nトッピングおまけ等のサービスをどうぞ！` });
+        // キリ番ラッキー演出
+        const interval = Number(luckyConfig.interval) || 10;
+        if (
+          luckyConfig.enabled &&
+          interval > 0 &&
+          nextValidCount > 0 &&
+          nextValidCount % interval === 0 &&
+          !(luckyConfig.triggeredMilestones || []).includes(nextValidCount)
+        ) {
+          setLuckyConfig(prev => ({
+            ...prev,
+            triggeredMilestones: [...(prev.triggeredMilestones || []), nextValidCount]
+          }));
+          setLuckyModal({
+            isOpen: true,
+            message: `🎊おめでとうございます！🎊\n本日 ${nextValidCount} 組目のお客様です！\nトッピング無料やおまけなどのサービスをどうぞ！`
+          });
         }
       };
 
-      const handleNumpadClick = (val) => {
+      const handleNumpadClick = (val, mode = 'append') => {
         setCheckoutModal(prev => {
           let currentStr = String(prev.received || '');
+          const currentNum = Number(currentStr) || 0;
+
           if (val === 'C') return { ...prev, received: '' };
           if (val === 'BS') return { ...prev, received: currentStr.slice(0, -1) };
           if (val === 'EXACT') return { ...prev, received: String(cartTotal) };
-          if (typeof val === 'number') return { ...prev, received: String(val) };
+
+          if (mode === 'add') {
+            const nextVal = Math.min(9999999, currentNum + Number(val));
+            return { ...prev, received: String(nextVal) };
+          }
+
+          if (typeof val === 'number') {
+            const nextVal = currentNum > 0 && currentNum + val <= 9999999 ? currentNum + val : val;
+            return { ...prev, received: String(nextVal) };
+          }
+
           if (currentStr === '0' && val !== '00') currentStr = '';
-          if (currentStr.length >= 7 && val !== 'C' && val !== 'BS') return prev;
+          if (currentStr === '' && (val === '0' || val === '00')) return { ...prev, received: '0' };
+          if (currentStr.length >= 7) return prev;
           return { ...prev, received: currentStr + val };
         });
       };
 
-      const validSales = salesHistory.filter(sale => !sale.isCancelled);
-      const totalSales = validSales.reduce((sum, sale) => sum + sale.total, 0);
-      const goalProgress = Math.min(goalAmount > 0 ? (totalSales / goalAmount) * 100 : 0, 100);
+      const getSaleNetTotal = (sale) => {
+        if (sale.isCancelled || sale.status === 'cancelled') return 0;
+        const refunded = Number(sale.refundAmount) || 0;
+        return Math.max(0, (Number(sale.total) || 0) - refunded);
+      };
+
+      const lastActiveSale = useMemo(() => {
+        return [...salesHistory].reverse().find(s => !s.isCancelled && s.status !== 'cancelled');
+      }, [salesHistory]);
+
+      const salesMetrics = useMemo(() => {
+        let grossSales = 0;
+        let totalRefunded = 0;
+        let netSales = 0;
+        let validTransactions = 0;
+        let cancelledTransactions = 0;
+
+        salesHistory.forEach(sale => {
+          if (sale.isCancelled || sale.status === 'cancelled') {
+            cancelledTransactions += 1;
+            totalRefunded += Number(sale.total) || 0;
+          } else {
+            validTransactions += 1;
+            grossSales += Number(sale.total) || 0;
+            const ref = Number(sale.refundAmount) || 0;
+            totalRefunded += ref;
+            netSales += Math.max(0, (Number(sale.total) || 0) - ref);
+          }
+        });
+
+        return { grossSales, totalRefunded, netSales, validTransactions, cancelledTransactions };
+      }, [salesHistory]);
+
+      const goalProgress = Math.min(goalAmount > 0 ? (salesMetrics.netSales / goalAmount) * 100 : 0, 100);
 
       const hourlyData = useMemo(() => {
-        const hours = Array(12).fill(0).map((_, i) => ({ hour: i + 9, sales: 0 }));
-        validSales.forEach(sale => {
-          const hour = sale.time.getHours();
-          const target = hours.find(h => h.hour === hour);
-          if (target) target.sales += sale.total;
+        const hours = Array(13).fill(0).map((_, i) => ({ hour: i + 8, sales: 0, count: 0 }));
+        salesHistory.forEach(sale => {
+          if (sale.isCancelled || sale.status === 'cancelled') return;
+          const d = new Date(sale.timeIso || sale.time);
+          if (!isNaN(d.getTime())) {
+            const hour = d.getHours();
+            const target = hours.find(h => h.hour === hour);
+            if (target) {
+              target.sales += getSaleNetTotal(sale);
+              target.count += 1;
+            }
+          }
         });
         return hours;
-      }, [validSales]);
+      }, [salesHistory]);
 
       const maxHourlySales = Math.max(...hourlyData.map(d => d.sales), 1000);
 
       const staffRanking = useMemo(() => {
-        const ranking = staff.map(s => ({ name: s, sales: 0 }));
-        validSales.forEach(sale => {
-          const target = ranking.find(r => r.name === sale.staff);
-          if (target) target.sales += sale.total;
-          else ranking.push({ name: sale.staff, sales: sale.total });
+        const rankingMap = {};
+        staff.forEach(s => { rankingMap[s] = { name: s, sales: 0, count: 0 }; });
+        salesHistory.forEach(sale => {
+          if (sale.isCancelled || sale.status === 'cancelled') return;
+          const sName = sale.staff || '担当者未設定';
+          if (!rankingMap[sName]) rankingMap[sName] = { name: sName, sales: 0, count: 0 };
+          rankingMap[sName].sales += getSaleNetTotal(sale);
+          rankingMap[sName].count += 1;
         });
-        return ranking.sort((a, b) => b.sales - a.sales);
-      }, [validSales, staff]);
+        return Object.values(rankingMap).sort((a, b) => b.sales - a.sales);
+      }, [salesHistory, staff]);
 
-      const confirmCancelSale = () => {
-        if (!cancelModal.sale) return;
-        const saleToCancel = cancelModal.sale;
-        const updatedItems = items.map(item => {
-          const returnedCount = saleToCancel.items.filter(c => c.id === item.id).length;
-          if (returnedCount > 0 && item.stock !== '') {
-            return { ...item, stock: Number(item.stock) + returnedCount };
-          }
-          return item;
+      const productRanking = useMemo(() => {
+        const map = {};
+        salesHistory.forEach(sale => {
+          if (sale.isCancelled || sale.status === 'cancelled') return;
+          (sale.items || []).forEach(cItem => {
+            if (cItem.isDiscount) return;
+            const originalQty = cItem.quantity || 1;
+            const retQty = cItem.returnedQuantity || 0;
+            const netQty = Math.max(0, originalQty - retQty);
+            if (netQty <= 0) return;
+
+            const key = cItem.selectedFlavor ? `${cItem.name}（${cItem.selectedFlavor}）` : cItem.name;
+            if (!map[key]) {
+              map[key] = {
+                key,
+                name: cItem.name,
+                flavor: cItem.selectedFlavor || null,
+                qty: 0,
+                revenue: 0
+              };
+            }
+            map[key].qty += netQty;
+            map[key].revenue += (Number(cItem.price) || 0) * netQty;
+          });
         });
-        setItems(updatedItems);
-        setSalesHistory(prev => prev.map(s => 
-          s.id === saleToCancel.id ? { ...s, isCancelled: true } : s
-        ));
-        setCancelModal({ isOpen: false, sale: null });
+        return Object.values(map).sort((a, b) => b.qty - a.qty || b.revenue - a.revenue);
+      }, [salesHistory]);
+
+      const openRefundModal = (sale, defaultMode = 'full') => {
+        const initialReturnQty = {};
+        (sale.items || []).forEach(item => {
+          if (!item.isDiscount) {
+            initialReturnQty[item.cartItemId] = 0;
+          }
+        });
+
+        setRefundModal({
+          isOpen: true,
+          sale,
+          mode: defaultMode,
+          returnQuantities: initialReturnQty,
+          restock: true,
+          reason: REFUND_REASONS[0],
+          customReason: ''
+        });
       };
 
-      const [csvFileName, setCsvFileName] = useState('学祭売上データ');
+      const handleExecuteRefund = () => {
+        const sale = refundModal.sale;
+        if (!sale) return;
+
+        const effectiveReason = refundModal.reason === 'その他' && refundModal.customReason.trim()
+          ? `その他: ${refundModal.customReason.trim()}`
+          : refundModal.reason;
+
+        const nowIso = new Date().toISOString();
+
+        if (refundModal.mode === 'full') {
+          // 全額取消
+          if (refundModal.restock) {
+            setItems(prevItems => {
+              return prevItems.map(item => {
+                const countToRestore = (sale.items || [])
+                  .filter(c => !c.isDiscount && c.id === item.id)
+                  .reduce((sum, c) => {
+                    const remainingActive = (c.quantity || 1) - (c.returnedQuantity || 0);
+                    return sum + Math.max(0, remainingActive);
+                  }, 0);
+                if (countToRestore > 0 && item.stock !== '') {
+                  return { ...item, stock: (Number(item.stock) || 0) + countToRestore };
+                }
+                return item;
+              });
+            });
+          }
+
+          setSalesHistory(prevHistory => {
+            return prevHistory.map(s => {
+              if (s.id !== sale.id) return s;
+              const refundAmt = Math.max(0, (Number(s.total) || 0) - (Number(s.refundAmount) || 0));
+              const newEvent = {
+                id: Date.now(),
+                timeIso: nowIso,
+                type: 'full_cancellation',
+                refundAmount: refundAmt,
+                reason: effectiveReason,
+                restocked: refundModal.restock,
+                staff: currentStaff || s.staff
+              };
+              return {
+                ...s,
+                isCancelled: true,
+                status: 'cancelled',
+                refundAmount: s.total,
+                cancelReason: effectiveReason,
+                refundEvents: [...(s.refundEvents || []), newEvent]
+              };
+            });
+          });
+
+          setRefundModal(p => ({ ...p, isOpen: false, sale: null }));
+          showToast(`取引を取り消しました（返金額: ¥${getSaleNetTotal(sale).toLocaleString()}）`, 'success');
+
+        } else {
+          // 一部返品・部分返金
+          let totalRefundCalc = 0;
+          const restoredItemCounts = {};
+          const updatedItems = (sale.items || []).map(item => {
+            if (item.isDiscount) return item;
+            const qtyToReturn = refundModal.returnQuantities[item.cartItemId] || 0;
+            if (qtyToReturn > 0) {
+              totalRefundCalc += (Number(item.price) || 0) * qtyToReturn;
+              restoredItemCounts[item.id] = (restoredItemCounts[item.id] || 0) + qtyToReturn;
+              return {
+                ...item,
+                returnedQuantity: (item.returnedQuantity || 0) + qtyToReturn
+              };
+            }
+            return item;
+          });
+
+          if (totalRefundCalc <= 0) {
+            showToast('返品する商品の数量を選択してください', 'error');
+            return;
+          }
+
+          if (refundModal.restock) {
+            setItems(prevItems => {
+              return prevItems.map(item => {
+                const countToAdd = restoredItemCounts[item.id] || 0;
+                if (countToAdd > 0 && item.stock !== '') {
+                  return { ...item, stock: (Number(item.stock) || 0) + countToAdd };
+                }
+                return item;
+              });
+            });
+          }
+
+          setSalesHistory(prevHistory => {
+            return prevHistory.map(s => {
+              if (s.id !== sale.id) return s;
+              const newTotalRefunded = (Number(s.refundAmount) || 0) + totalRefundCalc;
+              const isAllRefunded = newTotalRefunded >= s.total;
+              const newEvent = {
+                id: Date.now(),
+                timeIso: nowIso,
+                type: 'partial_refund',
+                refundAmount: totalRefundCalc,
+                returnedItems: Object.entries(refundModal.returnQuantities)
+                  .filter(([_, q]) => q > 0)
+                  .map(([cartItemId, q]) => {
+                    const original = s.items.find(i => i.cartItemId === cartItemId);
+                    return { name: original?.name || '', quantity: q, price: original?.price || 0 };
+                  }),
+                reason: effectiveReason,
+                restocked: refundModal.restock,
+                staff: currentStaff || s.staff
+              };
+
+              return {
+                ...s,
+                items: updatedItems,
+                refundAmount: newTotalRefunded,
+                status: isAllRefunded ? 'cancelled' : 'partially_refunded',
+                isCancelled: isAllRefunded,
+                refundEvents: [...(s.refundEvents || []), newEvent]
+              };
+            });
+          });
+
+          setRefundModal(p => ({ ...p, isOpen: false, sale: null }));
+          showToast(`一部返品を処理しました（返金: ¥${totalRefundCalc.toLocaleString()}）`, 'success');
+        }
+      };
+
+      const handleRestoreSale = (sale) => {
+        if (!sale) return;
+
+        setItems(prevItems => {
+          return prevItems.map(item => {
+            const soldCount = (sale.items || [])
+              .filter(c => !c.isDiscount && c.id === item.id)
+              .reduce((sum, c) => sum + (c.quantity || 1), 0);
+            if (soldCount > 0 && item.stock !== '') {
+              return { ...item, stock: Math.max(0, (Number(item.stock) || 0) - soldCount) };
+            }
+            return item;
+          });
+        });
+
+        setSalesHistory(prevHistory => {
+          return prevHistory.map(s => {
+            if (s.id !== sale.id) return s;
+            return {
+              ...s,
+              isCancelled: false,
+              status: 'valid',
+              refundAmount: 0,
+              items: (s.items || []).map(i => ({ ...i, returnedQuantity: 0 }))
+            };
+          });
+        });
+
+        setRefundModal(p => ({ ...p, isOpen: false, sale: null }));
+        showToast('取消を解除し、取引を有効な状態に復元しました', 'info');
+      };
+
       const handleExportCSV = () => {
         if (salesHistory.length === 0) {
-          alert('出力する売上データがありません。');
+          showToast('出力する売上データがありません', 'error');
           return;
         }
-        const headers = ['取引時間', '内容', '売上金額', '担当スタッフ', 'ステータス'];
+        const headers = ['取引日時', '注文内容', '合計点数', '元合計金額', '返金額', '純売上', 'お預かり', 'お釣り', '担当スタッフ', 'ステータス', '返金・取消理由'];
         const data = salesHistory.map(sale => {
-          const time = sale.time.toLocaleTimeString();
-          const itemsStr = sale.items.map(item => {
+          const d = new Date(sale.timeIso || sale.time);
+          const timeStr = !isNaN(d.getTime()) ? d.toLocaleString('ja-JP') : '';
+          const itemsStr = (sale.items || []).map(item => {
+            const qty = item.quantity || 1;
+            const ret = item.returnedQuantity || 0;
             let name = item.name;
             if (item.isDiscount) name = `【割引】${name}`;
             if (item.selectedFlavor) name += `(${item.selectedFlavor})`;
-            return name;
+            if (ret > 0) return `${name}×${qty}(内返品${ret})`;
+            return `${name}×${qty}`;
           }).join(' / ');
-          const status = sale.isCancelled ? "取消済" : "有効";
-          return `"${time}","${itemsStr}",${sale.total},"${sale.staff}","${status}"`;
+          
+          const net = getSaleNetTotal(sale);
+          const itemCount = (sale.items || []).reduce((s, i) => s + (i.isDiscount ? 0 : (i.quantity || 1)), 0);
+          let statusText = '有効';
+          if (sale.isCancelled || sale.status === 'cancelled') statusText = '全額取消済';
+          else if (sale.status === 'partially_refunded') statusText = '一部返品済';
+
+          const reason = sale.cancelReason || (sale.refundEvents && sale.refundEvents.length > 0 ? sale.refundEvents[0].reason : '');
+
+          return `"${timeStr}","${itemsStr}",${itemCount},${sale.total},${sale.refundAmount || 0},${net},${sale.received || sale.total},${sale.change || 0},"${sale.staff}","${statusText}","${reason}"`;
         });
         
         const csvContent = [headers.join(','), ...data].join('\n');
@@ -226,10 +770,12 @@
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.setAttribute('href', url);
-        link.setAttribute('download', `${csvFileName || '売上データ'}.csv`);
+        link.setAttribute('download', `${csvFileName || '学祭売上データ'}.csv`);
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        showToast('CSVファイルをダウンロードしました', 'success');
       };
 
       const navItems = [
@@ -239,246 +785,506 @@
         { id: 'settings', label: '設定', icon: <Settings size={22} /> },
       ];
 
+      const filteredItems = useMemo(() => {
+        if (selectedCategory === 'すべて') return items;
+        return items.filter(i => (i.category || '').trim() === selectedCategory);
+      }, [items, selectedCategory]);
+
+      if (!isLoaded) {
+        return <div className="h-screen flex items-center justify-center font-black text-indigo-700 bg-slate-50">読み込み中...</div>;
+      }
+
       return (
-        <div className="flex flex-col md:flex-row h-screen bg-gray-100 text-gray-800 font-sans overflow-hidden">
-          {/* PC用サイドバー */}
-          <aside className="hidden md:flex flex-col w-64 bg-indigo-900 text-white shadow-xl z-20 flex-shrink-0">
-            <div className="p-5 border-b border-indigo-800/50">
-              <h1 className="text-2xl font-black flex items-center tracking-wider text-white drop-shadow-md">
-                <Store className="mr-3 text-yellow-400" size={28} /> 学祭POS
-              </h1>
+        <div className="flex flex-col md:flex-row h-screen bg-slate-100 text-slate-800 font-sans overflow-hidden">
+          {/* トースト通知 */}
+          {toast && (
+            <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[10000] px-4 w-full max-w-md pointer-events-none animate-fade-in-up">
+              <div className={`pointer-events-auto flex items-center justify-between px-4 py-3 rounded-2xl shadow-xl border text-sm font-bold ${
+                toast.type === 'error' ? 'bg-red-600 text-white border-red-500' :
+                toast.type === 'success' ? 'bg-emerald-600 text-white border-emerald-500' :
+                'bg-slate-900 text-white border-slate-700'
+              }`}>
+                <div className="flex items-center gap-2.5">
+                  {toast.type === 'error' ? <AlertCircle size={18} className="shrink-0" /> : <Check size={18} className="shrink-0" />}
+                  <span>{toast.message}</span>
+                </div>
+                <button onClick={() => setToast(null)} className="ml-3 opacity-80 hover:opacity-100 p-1"><X size={16} /></button>
+              </div>
             </div>
-            <nav className="flex-1 p-4 space-y-3">
+          )}
+
+          {/* PC用サイドバー */}
+          <aside className="hidden md:flex flex-col w-60 bg-slate-950 text-white shadow-xl z-20 flex-shrink-0">
+            <div className="p-5 border-b border-slate-800 flex items-center justify-between">
+              <h1 className="text-xl font-black flex items-center tracking-wider text-white">
+                <Store className="mr-2.5 text-amber-400" size={26} /> 学祭POS
+              </h1>
+              <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 px-2 py-0.5 rounded-full font-bold">自動保存</span>
+            </div>
+            <nav className="flex-1 p-3 space-y-2">
               {navItems.map(item => (
                 <button
                   key={item.id}
                   onClick={() => setActiveTab(item.id)}
-                  className={`w-full flex items-center p-3 rounded-xl transition-all duration-200 ${
+                  className={`w-full flex items-center p-3.5 rounded-xl transition-all duration-150 ${
                     activeTab === item.id 
-                      ? 'bg-indigo-600 text-white shadow-md font-bold scale-105' 
-                      : 'text-indigo-200 hover:bg-indigo-800 hover:text-white'
+                      ? 'bg-indigo-600 text-white shadow-md font-black' 
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white font-bold'
                   }`}
                 >
                   <span className="mr-3">{item.icon}</span>
                   {item.label}
                 </button>
               ))}
+
+              <div className="pt-2">
+                <button
+                  onClick={() => setHelpModalOpen(true)}
+                  className="w-full flex items-center p-3 rounded-xl bg-amber-400/10 hover:bg-amber-400/20 text-amber-300 border border-amber-400/30 font-black text-xs transition-colors"
+                >
+                  <BookOpen size={18} className="mr-2.5 shrink-0 text-amber-400" />
+                  使い方説明書
+                </button>
+              </div>
             </nav>
+            <div className="p-4 border-t border-slate-800 text-xs text-slate-400 space-y-1.5">
+              <div className="flex justify-between">
+                <span>純売上</span>
+                <span className="font-black text-white text-sm">¥{salesMetrics.netSales.toLocaleString()}</span>
+              </div>
+              {salesMetrics.totalRefunded > 0 && (
+                <div className="flex justify-between text-rose-300">
+                  <span>返金・取消計</span>
+                  <span className="font-bold">-¥{salesMetrics.totalRefunded.toLocaleString()}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span>有効組数</span>
+                <span className="font-bold text-white">{salesMetrics.validTransactions}組</span>
+              </div>
+            </div>
           </aside>
 
-          {/* メインコンテンツ */}
+          {/* メインビュー */}
           <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
-            <header className="bg-white border-b border-gray-200 p-3 flex justify-between items-center shadow-sm z-10 flex-shrink-0">
-              <div className="md:hidden font-black text-indigo-900 flex items-center text-lg">
-                <Store className="mr-2 text-indigo-600" size={20}/> POS
+            <header className="bg-white border-b border-slate-200 px-3 py-2 flex justify-between items-center shadow-xs z-10 flex-shrink-0">
+              <div className="md:hidden font-black text-slate-900 flex items-center text-sm sm:text-base">
+                <Store className="mr-1.5 text-indigo-600" size={20}/> 学祭POS
               </div>
-              <div className="flex-1 flex justify-end items-center space-x-4 sm:space-x-6">
-                <div className="w-40 sm:w-56 hidden sm:block">
-                  <div className="flex justify-between text-xs mb-1 text-gray-500 font-bold">
-                    <span>目標: {goalAmount.toLocaleString()}円</span>
-                    <span className="text-indigo-600">{totalSales.toLocaleString()}円</span>
+              <div className="flex-1 flex justify-end items-center space-x-2 sm:space-x-4">
+                {/* 使い方説明書ボタン */}
+                <button
+                  onClick={() => setHelpModalOpen(true)}
+                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-black transition-all active:scale-95 shadow-2xs"
+                >
+                  <BookOpen size={15} className="text-amber-600" />
+                  <span className="hidden sm:inline">使い方説明書</span>
+                  <span className="sm:hidden">説明書</span>
+                </button>
+
+                <div className="w-32 sm:w-52 hidden sm:block">
+                  <div className="flex justify-between text-xs mb-1 text-slate-500 font-bold">
+                    <span>目標: ¥{goalAmount.toLocaleString()}</span>
+                    <span className="text-indigo-600 font-black">¥{salesMetrics.netSales.toLocaleString()} ({Math.round(goalProgress)}%)</span>
                   </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div className="bg-yellow-400 h-2 rounded-full transition-all duration-500 shadow-sm" style={{ width: `${goalProgress}%` }}></div>
+                  <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                    <div className="bg-gradient-to-r from-indigo-500 to-amber-400 h-2 rounded-full transition-all duration-500" style={{ width: `${goalProgress}%` }}></div>
                   </div>
                 </div>
-                <div className="flex items-center bg-gray-50 rounded-lg border border-gray-200 overflow-hidden">
-                  <div className="px-2 sm:px-3 text-gray-500 bg-gray-100 flex items-center h-full border-r border-gray-200">
-                    <User size={16} className="md:mr-1"/>
-                    <span className="hidden md:inline text-xs font-bold">担当</span>
+
+                <div className="flex items-center bg-slate-50 rounded-xl border border-slate-200 overflow-hidden">
+                  <div className="px-2 py-1.5 text-slate-500 bg-slate-100 flex items-center border-r border-slate-200">
+                    <User size={14} className="mr-1 text-indigo-600"/>
+                    <span className="text-xs font-bold">担当</span>
                   </div>
                   <select 
                     value={currentStaff}
                     onChange={(e) => setCurrentStaff(e.target.value)}
-                    className="bg-transparent text-gray-800 border-none p-2 text-sm font-bold outline-none cursor-pointer hover:bg-gray-100 transition-colors"
+                    className="bg-transparent text-slate-800 border-none py-1.5 px-2 text-xs sm:text-sm font-black outline-none cursor-pointer"
                   >
-                    {staff.length === 0 && <option value="">未設定</option>}
+                    {staff.length === 0 && <option value="">スタッフ未登録</option>}
                     {staff.map(s => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </div>
               </div>
             </header>
 
+            {/* 直前会計ワンタップ取消通知バー */}
+            {activeTab === 'register' && lastActiveSale && (
+              <div className="bg-amber-50 border-b border-amber-200 px-3 py-1.5 flex items-center justify-between text-xs text-amber-900 shrink-0">
+                <div className="flex items-center gap-1.5 truncate">
+                  <span className="bg-amber-200/80 text-amber-900 px-1.5 py-0.5 rounded font-black text-[10px]">直前会計</span>
+                  <span className="font-bold">{new Date(lastActiveSale.timeIso).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                  <span className="font-black text-indigo-900">¥{getSaleNetTotal(lastActiveSale).toLocaleString()}</span>
+                  <span className="hidden sm:inline text-slate-600 truncate">
+                    ({(lastActiveSale.items || []).map(i => `${i.name}×${i.quantity || 1}`).join(', ')})
+                  </span>
+                </div>
+                <div className="flex items-center gap-1 shrink-0 ml-2">
+                  <button 
+                    onClick={() => openRefundModal(lastActiveSale, 'full')}
+                    className="bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 hover:border-rose-300 font-black px-2.5 py-1 rounded-lg flex items-center shadow-xs transition-colors active:scale-95"
+                  >
+                    <RotateCcw size={13} className="mr-1" /> 直前取引を取り消す / 返金
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* 各タブの切り替えメインエリア */}
             <main className="flex-1 overflow-hidden flex flex-col">
               {activeTab === 'register' && (
-                <div className="flex flex-col md:flex-row h-full">
-                  <div className="flex-1 p-3 sm:p-4 overflow-y-auto bg-gray-50 border-r border-gray-200">
-                    <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4 pb-20 md:pb-0">
-                      {items.map(item => (
-                        <button
-                          key={item.id}
-                          onClick={() => handleItemClick(item)}
-                          disabled={item.stock <= 0}
-                          className={`relative rounded-2xl text-left transition-all duration-200 transform hover:-translate-y-1 active:translate-y-0 flex flex-col overflow-hidden border-2 ${
-                            item.stock <= 0 
-                              ? 'bg-gray-100 border-gray-200 opacity-60 cursor-not-allowed grayscale-[50%]' 
-                              : 'bg-white border-transparent hover:border-indigo-300 shadow-md hover:shadow-lg'
-                          }`}
-                        >
-                          {item.stock <= 0 && (
-                            <div className="absolute inset-0 flex items-center justify-center bg-white/40 backdrop-blur-[2px] z-10">
-                              <span className="bg-gray-800 text-white font-black py-1.5 px-6 rounded-full rotate-[-12deg] text-lg border-2 border-white shadow-xl">完売</span>
-                            </div>
-                          )}
-                          {item.image ? (
-                            <div className="h-24 sm:h-32 w-full bg-cover bg-center border-b border-gray-100 shrink-0" style={{ backgroundImage: `url(${item.image})` }} />
-                          ) : (
-                            <div className="h-24 sm:h-32 w-full bg-indigo-50/50 flex flex-col items-center justify-center border-b border-gray-100 text-indigo-300 shrink-0">
-                               <ImageIcon size={32} className="mb-2 opacity-50" />
-                               <span className="text-xs font-bold opacity-60">No Image</span>
-                            </div>
-                          )}
-                          <div className="p-3 sm:p-4 flex-1 flex flex-col justify-between w-full">
-                            <div>
-                              <div className="text-[10px] sm:text-xs text-indigo-500 mb-1 font-black tracking-wider">{item.category}</div>
-                              <div className="font-bold text-base sm:text-lg leading-tight mb-2 text-gray-800">{item.name}</div>
-                            </div>
-                            <div className="flex justify-between items-end mt-1">
-                              <div className="text-lg sm:text-xl font-black text-indigo-900">¥{item.price}</div>
-                              <div className={`text-[10px] sm:text-xs px-2 py-1 rounded-md font-bold ${item.stock < 10 && item.stock > 0 ? 'bg-red-100 text-red-700 border border-red-200' : 'bg-gray-100 text-gray-600 border border-gray-200'}`}>
-                                残 {item.stock}
-                              </div>
-                            </div>
+                <div className="flex flex-col md:flex-row h-full relative">
+                  {/* 左側：商品グリッド */}
+                  <div className="flex-1 flex flex-col overflow-hidden bg-slate-50 md:border-r border-slate-200">
+                    {categories.length > 2 && (
+                      <div className="px-3 pt-3 pb-1 flex gap-2 overflow-x-auto shrink-0">
+                        {categories.map(cat => (
+                          <button
+                            key={cat}
+                            onClick={() => setSelectedCategory(cat)}
+                            className={`px-3.5 py-1.5 rounded-full text-xs font-black whitespace-nowrap transition-all ${
+                              selectedCategory === cat
+                                ? 'bg-indigo-600 text-white shadow-sm'
+                                : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                            }`}
+                          >
+                            {cat}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="flex-1 p-3 sm:p-4 overflow-y-auto">
+                      {items.length === 0 ? (
+                        <div className="h-full flex flex-col items-center justify-center text-center p-6 bg-white rounded-3xl border-2 border-dashed border-slate-300 max-w-lg mx-auto my-4">
+                          <Store size={48} className="text-indigo-300 mb-3" />
+                          <h3 className="text-lg font-black text-slate-800 mb-1">商品が登録されていません</h3>
+                          <p className="text-xs text-slate-500 mb-5 leading-relaxed">
+                            「設定」タブから商品を追加するか、サンプル商品を追加してすぐにレジを試せます。<br/>
+                            予算シミュレーターのデータがある場合はそちらから引き継ぐことも可能です。
+                          </p>
+                          <div className="flex flex-wrap justify-center gap-3">
+                            <button
+                              onClick={() => {
+                                setItems(SAMPLE_ITEMS);
+                                if (staff.length === 0) setStaff(['A班', 'B班']);
+                                showToast('サンプル商品を登録しました！', 'success');
+                              }}
+                              className="bg-indigo-600 hover:bg-indigo-700 text-white font-black text-sm px-5 py-3 rounded-xl shadow-md transition-all flex items-center active:scale-95"
+                            >
+                              <Sparkles size={16} className="mr-1.5" /> サンプル商品を読み込む
+                            </button>
+                            <button
+                              onClick={() => setActiveTab('settings')}
+                              className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm px-5 py-3 rounded-xl transition-all flex items-center"
+                            >
+                              <Settings size={16} className="mr-1.5" /> 設定タブを開く
+                            </button>
                           </div>
-                        </button>
-                      ))}
-                      
-                      {items.length === 0 && (
-                        <div className="relative rounded-2xl text-left flex flex-col overflow-hidden border-2 border-dashed border-gray-300 bg-white opacity-80 select-none">
-                          <div className="absolute inset-0 flex items-center justify-center z-10 bg-white/50 backdrop-blur-[2px]">
-                            <div className="text-center px-2">
-                              <div className="bg-gray-800 text-white text-[10px] sm:text-xs font-black py-1.5 px-4 rounded-full shadow-lg mb-2 inline-block">
-                                商品未登録
-                              </div>
-                              <p className="text-[10px] sm:text-xs font-bold text-gray-600">設定タブから<br/>追加してください</p>
-                            </div>
-                          </div>
-                          <div className="h-24 sm:h-32 w-full bg-gray-100 flex flex-col items-center justify-center border-b border-gray-100 text-gray-300 shrink-0">
-                             <ImageIcon size={32} className="mb-2 opacity-40" />
-                             <span className="text-xs font-bold opacity-40">No Image</span>
-                          </div>
-                          <div className="p-3 sm:p-4 flex-1 flex flex-col justify-between w-full">
-                            <div>
-                              <div className="text-[10px] sm:text-xs text-gray-400 mb-1 font-black tracking-wider">例: フード</div>
-                              <div className="font-bold text-base sm:text-lg leading-tight mb-2 text-gray-300">焼きそば</div>
-                            </div>
-                            <div className="flex justify-between items-end mt-1">
-                              <div className="text-lg sm:text-xl font-black text-gray-300">¥400</div>
-                              <div className="text-[10px] sm:text-xs px-2 py-1 rounded-md font-bold bg-gray-100 text-gray-400 border border-gray-200">
-                                残 50
-                              </div>
-                            </div>
-                          </div>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4 pb-36 md:pb-6">
+                          {filteredItems.map(item => {
+                            const available = getAvailableStock(item);
+                            const inCartQty = cartQtyByItemId[item.id] || 0;
+                            const isSoldOut = (Number(item.stock) || 0) <= 0;
+                            const isMaxInCart = !isSoldOut && available <= 0;
+
+                            return (
+                              <button
+                                key={item.id}
+                                onClick={() => handleItemClick(item)}
+                                disabled={isSoldOut || isMaxInCart}
+                                className={`relative rounded-2xl text-left transition-all duration-150 flex flex-col overflow-hidden border-2 ${
+                                  isSoldOut || isMaxInCart
+                                    ? 'bg-slate-100 border-slate-200 opacity-60 cursor-not-allowed' 
+                                    : 'bg-white border-transparent hover:border-indigo-400 active:scale-[0.98] shadow-xs hover:shadow-md'
+                                }`}
+                              >
+                                {inCartQty > 0 && (
+                                  <div className="absolute top-2 right-2 z-20 bg-indigo-600 text-white text-xs font-black px-2.5 py-1 rounded-full shadow-md border-2 border-white">
+                                    カート内 {inCartQty}
+                                  </div>
+                                )}
+
+                                {(isSoldOut || isMaxInCart) && (
+                                  <div className="absolute inset-0 flex items-center justify-center bg-white/60 backdrop-blur-[1px] z-10">
+                                    <span className="bg-slate-900 text-white font-black py-1.5 px-4 rounded-full rotate-[-8deg] text-xs sm:text-sm border-2 border-white shadow-lg">
+                                      {isSoldOut ? '完売' : '在庫上限'}
+                                    </span>
+                                  </div>
+                                )}
+
+                                {item.image ? (
+                                  <div className="h-24 sm:h-28 w-full bg-cover bg-center border-b border-slate-100 shrink-0" style={{ backgroundImage: `url(${item.image})` }} />
+                                ) : (
+                                  <div className="h-20 sm:h-24 w-full bg-gradient-to-br from-indigo-50 to-slate-100 flex flex-col items-center justify-center border-b border-slate-100 text-indigo-300 shrink-0">
+                                    <ImageIcon size={26} className="opacity-50" />
+                                  </div>
+                                )}
+
+                                <div className="p-3 flex-1 flex flex-col justify-between w-full">
+                                  <div>
+                                    <div className="flex items-center justify-between gap-1 mb-1">
+                                      <span className="text-[10px] text-indigo-600 font-black tracking-wider truncate">{item.category || '一般'}</span>
+                                      {item.flavors && item.flavors.length > 0 && (
+                                        <span className="text-[10px] bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded font-bold shrink-0">味選択</span>
+                                      )}
+                                    </div>
+                                    <div className="font-black text-sm sm:text-base leading-snug mb-2 text-slate-800 line-clamp-2">{item.name}</div>
+                                  </div>
+                                  <div className="flex justify-between items-end mt-1 pt-1 border-t border-slate-50">
+                                    <div className="text-base sm:text-lg font-black text-indigo-950">¥{(Number(item.price) || 0).toLocaleString()}</div>
+                                    <div className={`text-[10px] sm:text-xs px-2 py-0.5 rounded-md font-bold ${
+                                      available <= 5 ? 'bg-rose-100 text-rose-700 border border-rose-200' : 'bg-slate-100 text-slate-600'
+                                    }`}>
+                                      残 {available}
+                                    </div>
+                                  </div>
+                                </div>
+                              </button>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
                   </div>
 
-                  <div className="w-full md:w-80 lg:w-96 bg-white flex flex-col h-full shadow-[-4px_0_15px_rgba(0,0,0,0.03)] flex-shrink-0 z-10">
-                    <div className="p-4 bg-white border-b border-gray-100 flex justify-between items-center shrink-0">
-                      <h2 className="text-lg font-black text-gray-800 flex items-center"><ShoppingCart className="mr-2 text-indigo-600" size={20}/> カート</h2>
-                      <button onClick={() => setCart([])} className="text-xs text-red-500 flex items-center hover:bg-red-50 px-2 py-1.5 rounded-lg font-bold transition-colors border border-transparent hover:border-red-100">
-                        <Trash2 size={14} className="mr-1" /> 全てクリア
-                      </button>
-                    </div>
-                    
-                    <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-2 bg-gray-50/50">
-                      {cart.length === 0 ? (
-                        <div className="flex flex-col items-center justify-center h-full text-gray-400">
-                          <ShoppingCart size={48} className="mb-4 opacity-20" />
-                          <p className="font-bold text-sm">注文がありません</p>
-                          <p className="text-xs mt-1 opacity-70">左のメニューから追加してください</p>
+                  {/* モバイル用：下部フローティングカートバー */}
+                  <div className="md:hidden fixed bottom-16 left-0 right-0 px-3 z-30 pointer-events-none">
+                    <div className="bg-slate-900 text-white rounded-2xl p-3 shadow-2xl border border-slate-700 flex items-center justify-between pointer-events-auto">
+                      <button
+                        onClick={() => setMobileCartOpen(!mobileCartOpen)}
+                        className="flex items-center space-x-3 flex-1 text-left"
+                      >
+                        <div className="relative bg-indigo-600 p-2 rounded-xl">
+                          <ShoppingCart size={20} className="text-white" />
+                          {cartTotalCount > 0 && (
+                            <span className="absolute -top-1.5 -right-1.5 bg-rose-500 text-white text-[10px] font-black w-5 h-5 rounded-full flex items-center justify-center">
+                              {cartTotalCount}
+                            </span>
+                          )}
                         </div>
-                      ) : (
-                        cart.map((cItem) => (
-                          <div key={cItem.cartItemId} className="flex justify-between items-center bg-white p-3 rounded-xl shadow-sm border border-gray-200 animate-fade-in-up">
-                            <div className="flex-1 min-w-0 pr-2">
-                              <div className="font-bold text-sm text-gray-800 truncate">
-                                {cItem.isDiscount && <span className="text-red-500 mr-1 bg-red-50 px-1 rounded">割</span>}
-                                {cItem.name}
-                              </div>
-                              {cItem.selectedFlavor && (
-                                <div className="text-[10px] sm:text-xs text-indigo-700 bg-indigo-50 inline-block px-1.5 py-0.5 rounded-md mt-1 font-bold border border-indigo-100">味: {cItem.selectedFlavor}</div>
-                              )}
-                            </div>
-                            <div className="flex items-center space-x-3 shrink-0">
-                              <div className={`font-black ${cItem.isDiscount ? 'text-red-500' : 'text-gray-800'}`}>
-                                ¥{cItem.price}
-                              </div>
-                              <button onClick={() => removeFromCart(cItem.cartItemId)} className="text-gray-400 hover:text-red-500 bg-gray-100 hover:bg-red-100 rounded-full p-1.5 transition-colors">
-                                <X size={14} />
-                              </button>
-                            </div>
+                        <div>
+                          <div className="text-[10px] text-slate-300 font-bold flex items-center">
+                            カート内訳を見る {mobileCartOpen ? <ChevronDown size={14} className="ml-1"/> : <ChevronUp size={14} className="ml-1"/>}
                           </div>
-                        ))
-                      )}
-                    </div>
-
-                    <div className="bg-white p-4 sm:p-5 border-t border-gray-200 shadow-[0_-10px_20px_-10px_rgba(0,0,0,0.05)] shrink-0 rounded-t-2xl md:rounded-none relative z-20 pb-24 md:pb-5">
-                      <button onClick={() => setDiscountModal({ isOpen: true, amount: lastDiscountAmount })} className="w-full mb-4 border-2 border-dashed border-indigo-200 text-indigo-600 py-2.5 rounded-xl font-bold hover:bg-indigo-50 active:bg-indigo-100 flex justify-center items-center transition-colors">
-                        <Minus size={16} className="mr-1" /> 任意の金額で割引
+                          <div className="text-lg font-black">¥{cartTotal.toLocaleString()}</div>
+                        </div>
                       </button>
-                      <div className="flex justify-between items-end mb-4 px-1">
-                        <div className="text-gray-500 font-bold text-sm">合計 <span className="bg-gray-100 px-2 py-0.5 rounded-full text-gray-700 ml-1">{cart.length}点</span></div>
-                        <div className="text-4xl font-black text-indigo-700 tracking-tight">¥{cartTotal.toLocaleString()}</div>
-                      </div>
-                      <button 
+                      <button
                         onClick={openCheckout}
                         disabled={cart.length === 0}
-                        className={`w-full py-4 rounded-2xl font-black text-lg flex justify-center items-center transition-all duration-200 ${
-                          cart.length === 0 
-                            ? 'bg-gray-200 text-gray-400 cursor-not-allowed' 
-                            : 'bg-indigo-600 text-white shadow-lg hover:shadow-indigo-500/30 hover:-translate-y-1 active:translate-y-0 active:shadow-md'
+                        className={`px-5 py-2.5 rounded-xl font-black text-sm flex items-center transition-all ${
+                          cart.length === 0
+                            ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                            : 'bg-amber-400 text-slate-950 hover:bg-amber-300 shadow-md active:scale-95'
                         }`}
                       >
-                        <Calculator className="mr-2" /> お会計へ進む
+                        お会計へ
                       </button>
+                    </div>
+                  </div>
+
+                  {/* PC用右サイドカート ＆ モバイル用ドロワーカート */}
+                  <div className={`${
+                    mobileCartOpen ? 'fixed inset-0 z-40 bg-black/50 flex flex-col justify-end md:static md:bg-transparent' : 'hidden md:flex'
+                  } md:w-80 lg:w-96 flex-shrink-0 h-full`}>
+                    <div className="bg-white w-full h-[78vh] md:h-full rounded-t-3xl md:rounded-none flex flex-col shadow-2xl md:shadow-none overflow-hidden">
+                      <div className="p-4 bg-white border-b border-slate-100 flex justify-between items-center shrink-0">
+                        <h2 className="text-base font-black text-slate-800 flex items-center">
+                          <ShoppingCart className="mr-2 text-indigo-600" size={20}/> 注文カート
+                          <span className="ml-2 text-xs bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full font-black">{cartTotalCount}点</span>
+                        </h2>
+                        <div className="flex items-center gap-2">
+                          {cart.length > 0 && (
+                            <button onClick={() => setCart([])} className="text-xs text-rose-500 flex items-center hover:bg-rose-50 px-2 py-1 rounded-lg font-bold transition-colors">
+                              <Trash2 size={14} className="mr-1" /> 全消去
+                            </button>
+                          )}
+                          <button onClick={() => setMobileCartOpen(false)} className="md:hidden p-1.5 bg-slate-100 rounded-full text-slate-600">
+                            <X size={18} />
+                          </button>
+                        </div>
+                      </div>
+                      
+                      <div className="flex-1 overflow-y-auto p-3 space-y-2.5 bg-slate-50/60">
+                        {cart.length === 0 ? (
+                          <div className="flex flex-col items-center justify-center h-full text-slate-400 py-10">
+                            <ShoppingCart size={40} className="mb-2 opacity-25" />
+                            <p className="font-bold text-sm">カートは空です</p>
+                            <p className="text-xs mt-1 opacity-70">商品をタップして追加してください</p>
+                          </div>
+                        ) : (
+                          cart.map((cItem) => {
+                            const qty = cItem.quantity || 1;
+                            const subtotal = (Number(cItem.price) || 0) * qty;
+                            return (
+                              <div key={cItem.cartItemId} className="bg-white p-3 rounded-2xl shadow-xs border border-slate-200 flex items-center justify-between gap-2 animate-fade-in-up">
+                                <div className="flex-1 min-w-0">
+                                  <div className="font-black text-sm text-slate-800 truncate flex items-center">
+                                    {cItem.isDiscount && <span className="text-xs text-rose-600 mr-1.5 bg-rose-50 px-1.5 py-0.5 rounded font-black">値引</span>}
+                                    {cItem.name}
+                                  </div>
+                                  <div className="flex items-center gap-2 mt-1">
+                                    {cItem.selectedFlavor && (
+                                      <span className="text-[11px] text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md font-bold border border-indigo-100">
+                                        {cItem.selectedFlavor}
+                                      </span>
+                                    )}
+                                    <span className="text-xs text-slate-400 font-bold">@¥{Number(cItem.price).toLocaleString()}</span>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {!cItem.isDiscount ? (
+                                    <div className="flex items-center bg-slate-100 rounded-xl p-0.5 border border-slate-200">
+                                      <button
+                                        onClick={() => updateCartQuantity(cItem.cartItemId, -1)}
+                                        className="w-7 h-7 flex items-center justify-center rounded-lg bg-white text-slate-700 shadow-xs hover:bg-rose-50 hover:text-rose-600 font-black"
+                                      >
+                                        <Minus size={14} />
+                                      </button>
+                                      <span className="w-7 text-center font-black text-sm text-slate-800">{qty}</span>
+                                      <button
+                                        onClick={() => updateCartQuantity(cItem.cartItemId, 1)}
+                                        className="w-7 h-7 flex items-center justify-center rounded-lg bg-white text-indigo-600 shadow-xs hover:bg-indigo-50 font-black"
+                                      >
+                                        <Plus size={14} />
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button onClick={() => removeFromCart(cItem.cartItemId)} className="p-1.5 text-slate-400 hover:text-rose-500 bg-slate-100 rounded-full">
+                                      <X size={14} />
+                                    </button>
+                                  )}
+                                  <div className={`w-16 text-right font-black text-sm ${cItem.isDiscount ? 'text-rose-500' : 'text-slate-900'}`}>
+                                    ¥{subtotal.toLocaleString()}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+
+                      <div className="bg-white p-4 border-t border-slate-200 shrink-0 pb-20 md:pb-4">
+                        <button
+                          onClick={() => setDiscountModal({ isOpen: true, amount: lastDiscountAmount })}
+                          className="w-full mb-3 border-2 border-dashed border-indigo-200 text-indigo-600 py-2 rounded-xl text-xs font-black hover:bg-indigo-50 flex justify-center items-center transition-colors"
+                        >
+                          <Minus size={14} className="mr-1" /> 値引き・セット割引を追加
+                        </button>
+                        <div className="flex justify-between items-baseline mb-3 px-1">
+                          <span className="text-slate-500 font-bold text-xs">合計金額</span>
+                          <span className="text-3xl font-black text-indigo-700 tracking-tight">¥{cartTotal.toLocaleString()}</span>
+                        </div>
+                        <button 
+                          onClick={openCheckout}
+                          disabled={cart.length === 0}
+                          className={`w-full py-3.5 rounded-2xl font-black text-base flex justify-center items-center transition-all ${
+                            cart.length === 0 
+                              ? 'bg-slate-200 text-slate-400 cursor-not-allowed' 
+                              : 'bg-indigo-600 text-white shadow-lg hover:bg-indigo-700 active:scale-[0.99]'
+                          }`}
+                        >
+                          <Calculator className="mr-2" size={20} /> お会計へ進む
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
               )}
 
-              {activeTab === 'dashboard' && <DashboardTab totalSales={totalSales} goalAmount={goalAmount} goalProgress={goalProgress} salesHistory={salesHistory} validSalesCount={validSales.length} hourlyData={hourlyData} maxHourlySales={maxHourlySales} staffRanking={staffRanking} csvFileName={csvFileName} setCsvFileName={setCsvFileName} handleExportCSV={handleExportCSV} onCancelSale={(sale) => setCancelModal({ isOpen: true, sale })} />}
-              {activeTab === 'close' && <CashierCloseTab totalSales={totalSales} salesCount={validSales.length} startCounts={startCashCounts} setStartCounts={setStartCashCounts} endCounts={endCashCounts} setEndCounts={setEndCashCounts} />}
-              {activeTab === 'settings' && <SettingsTab items={items} setItems={setItems} staff={staff} setStaff={setStaff} goalAmount={goalAmount} setGoalAmount={setGoalAmount} />}
+              {activeTab === 'dashboard' && (
+                <DashboardTab
+                  salesMetrics={salesMetrics}
+                  goalAmount={goalAmount}
+                  goalProgress={goalProgress}
+                  salesHistory={salesHistory}
+                  hourlyData={hourlyData}
+                  maxHourlySales={maxHourlySales}
+                  staffRanking={staffRanking}
+                  productRanking={productRanking}
+                  csvFileName={csvFileName}
+                  setCsvFileName={setCsvFileName}
+                  handleExportCSV={handleExportCSV}
+                  onOpenRefundModal={(sale) => openRefundModal(sale, 'full')}
+                  onRestoreSale={handleRestoreSale}
+                  getSaleNetTotal={getSaleNetTotal}
+                />
+              )}
+
+              {activeTab === 'close' && (
+                <CashierCloseTab
+                  salesMetrics={salesMetrics}
+                  startCounts={startCashCounts}
+                  setStartCounts={setStartCashCounts}
+                  endCounts={endCashCounts}
+                  setEndCounts={setEndCashCounts}
+                />
+              )}
+
+              {activeTab === 'settings' && (
+                <SettingsTab
+                  items={items}
+                  setItems={setItems}
+                  staff={staff}
+                  setStaff={setStaff}
+                  goalAmount={goalAmount}
+                  setGoalAmount={setGoalAmount}
+                  luckyConfig={luckyConfig}
+                  setLuckyConfig={setLuckyConfig}
+                  salesHistory={salesHistory}
+                  setSalesHistory={setSalesHistory}
+                  startCashCounts={startCashCounts}
+                  setStartCashCounts={setStartCashCounts}
+                  endCashCounts={endCashCounts}
+                  setEndCashCounts={setEndCashCounts}
+                  showToast={showToast}
+                />
+              )}
             </main>
           </div>
 
-          <nav className="md:hidden absolute bottom-0 left-0 w-full bg-white border-t border-gray-200 flex justify-around items-center shadow-[0_-5px_15px_rgba(0,0,0,0.05)] z-50 pb-safe">
+          {/* モバイル用ボトムバー */}
+          <nav className="md:hidden fixed bottom-0 left-0 w-full bg-white border-t border-slate-200 flex justify-around items-center z-50 h-14">
             {navItems.map(item => (
               <button
                 key={item.id}
-                onClick={() => setActiveTab(item.id)}
-                className={`flex flex-col items-center justify-center flex-1 py-3 transition-colors ${
-                  activeTab === item.id ? 'text-indigo-600' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-50'
+                onClick={() => { setActiveTab(item.id); setMobileCartOpen(false); }}
+                className={`flex flex-col items-center justify-center flex-1 h-full relative transition-colors ${
+                  activeTab === item.id ? 'text-indigo-600' : 'text-slate-400 hover:text-slate-600'
                 }`}
               >
-                <div className={`mb-1 transition-transform ${activeTab === item.id ? 'scale-110' : 'scale-100'}`}>
-                  {item.icon}
-                </div>
-                <span className={`text-[10px] font-bold ${activeTab === item.id ? 'text-indigo-600' : 'text-gray-500'}`}>
-                  {item.label}
-                </span>
                 {activeTab === item.id && <div className="absolute top-0 w-8 h-1 bg-indigo-600 rounded-b-full"></div>}
+                {item.icon}
+                <span className="text-[10px] font-black mt-0.5">{item.label}</span>
               </button>
             ))}
           </nav>
 
-          {flavorModal.isOpen && (
-            <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-4">
+          {/* 味選択モーダル */}
+          {flavorModal.isOpen && flavorModal.item && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4">
               <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl animate-fade-in-up">
-                <div className="flex justify-between items-center mb-6">
-                  <h3 className="text-xl font-black text-gray-800">{flavorModal.item.name}の味を選択</h3>
-                  <button onClick={() => setFlavorModal({ isOpen: false, item: null })} className="p-2 bg-gray-100 rounded-full text-gray-500 hover:bg-gray-200 hover:text-gray-800 transition-colors"><X size={20}/></button>
+                <div className="flex justify-between items-center mb-4">
+                  <div>
+                    <span className="text-xs font-bold text-indigo-600">種類・味を選択</span>
+                    <h3 className="text-xl font-black text-slate-800">{flavorModal.item.name}</h3>
+                  </div>
+                  <button onClick={() => setFlavorModal({ isOpen: false, item: null })} className="p-2 bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200"><X size={20}/></button>
                 </div>
-                <div className="space-y-3">
+                <div className="grid grid-cols-1 gap-2.5 max-h-80 overflow-y-auto py-1">
                   {flavorModal.item.flavors.map(flavor => (
                     <button
                       key={flavor}
                       onClick={() => addToCart(flavorModal.item, flavor)}
-                      className="w-full p-4 border-2 border-indigo-100 text-indigo-700 bg-indigo-50/50 rounded-2xl font-bold text-lg hover:bg-indigo-600 hover:text-white hover:border-indigo-600 transition-all active:scale-95 shadow-sm"
+                      className="w-full p-3.5 border-2 border-indigo-100 text-indigo-800 bg-indigo-50/40 rounded-2xl font-black text-base hover:bg-indigo-600 hover:text-white hover:border-indigo-600 transition-all active:scale-95 text-left flex justify-between items-center"
                     >
-                      {flavor}
+                      <span>{flavor}</span>
+                      <Plus size={18} />
                     </button>
                   ))}
                 </div>
@@ -486,255 +1292,593 @@
             </div>
           )}
 
+          {/* お会計テンキーモーダル */}
           {checkoutModal.isOpen && (
-            <div className="fixed inset-0 bg-gray-900/70 backdrop-blur-sm flex items-center justify-center z-[9999] p-2 sm:p-4 pb-safe">
-              <div className="bg-gray-50 rounded-[2rem] w-full max-w-md shadow-2xl flex flex-col h-[90vh] max-h-[600px] sm:h-auto sm:max-h-[90vh] overflow-hidden animate-fade-in-up border border-white/20">
-                <div className="bg-indigo-600 text-white p-3 sm:p-4 flex justify-between items-center shrink-0">
-                  <h3 className="text-xl font-black flex items-center tracking-wide"><Coins className="mr-2"/> お会計</h3>
-                  <button onClick={() => setCheckoutModal({ isOpen: false, received: '' })} className="text-white hover:bg-indigo-500 p-2 rounded-full transition-colors bg-white/10"><X size={20}/></button>
+            <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center z-[9999] p-2 sm:p-4">
+              <div className="bg-slate-50 rounded-3xl w-full max-w-md shadow-2xl flex flex-col max-h-[94vh] overflow-hidden animate-fade-in-up border border-white/20">
+                <div className="bg-indigo-600 text-white px-4 py-3 flex justify-between items-center shrink-0">
+                  <h3 className="text-lg font-black flex items-center"><Coins className="mr-2" size={20}/> お会計（レジ精算）</h3>
+                  <button onClick={() => setCheckoutModal({ isOpen: false, received: '' })} className="text-white hover:bg-indigo-500 p-1.5 rounded-full bg-white/10"><X size={20}/></button>
                 </div>
                 
-                <div className="p-3 sm:p-4 flex-1 flex flex-col overflow-hidden">
-                  <div className="bg-white rounded-2xl p-3 sm:p-4 shadow-sm border border-gray-100 mb-3 shrink-0">
-                    <div className="flex justify-between items-center border-b border-gray-100 pb-2 mb-2">
-                      <span className="text-gray-500 font-bold text-sm">ご請求金額</span>
-                      <span className="text-2xl sm:text-3xl font-black text-indigo-700 tracking-tight">¥{cartTotal.toLocaleString()}</span>
+                <div className="p-3 sm:p-4 flex-1 flex flex-col overflow-y-auto">
+                  <div className="bg-white rounded-2xl p-3.5 shadow-xs border border-slate-200 mb-3 shrink-0 space-y-2">
+                    <div className="flex justify-between items-center border-b border-slate-100 pb-2">
+                      <span className="text-slate-500 font-bold text-xs">合計 ({cartTotalCount}点)</span>
+                      <span className="text-2xl font-black text-indigo-700">¥{cartTotal.toLocaleString()}</span>
                     </div>
-                    <div className="mb-2">
-                      <label className="block text-xs text-gray-500 font-bold mb-1">お預かり金額</label>
-                      <div className="w-full p-2 sm:p-3 text-2xl sm:text-3xl text-right font-black text-gray-800 border-2 border-indigo-200 rounded-xl bg-indigo-50/30 h-12 sm:h-14 flex items-center justify-end shadow-inner">
-                        {checkoutModal.received ? `¥${Number(checkoutModal.received).toLocaleString()}` : <span className="text-gray-300">¥0</span>}
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs text-slate-500 font-bold">お預かり金額</span>
+                      <div className="px-3 py-1.5 text-2xl text-right font-black text-slate-900 border-2 border-indigo-200 rounded-xl bg-indigo-50/40 min-w-[160px]">
+                        {checkoutModal.received ? `¥${Number(checkoutModal.received).toLocaleString()}` : <span className="text-slate-300">¥0</span>}
                       </div>
                     </div>
-                    <div className="flex justify-between items-center pt-1">
-                      <span className="text-gray-500 font-bold text-sm">お釣り</span>
-                      <span className={`text-xl sm:text-2xl font-black ${Number(checkoutModal.received) - cartTotal < 0 ? 'text-red-500' : 'text-green-600'}`}>
-                        ¥{Math.max(0, Number(checkoutModal.received) - cartTotal).toLocaleString()}
+                    <div className="flex justify-between items-center pt-1 border-t border-slate-100">
+                      <span className="text-slate-500 font-bold text-xs">お釣り</span>
+                      <span className={`text-2xl font-black ${Number(checkoutModal.received) - cartTotal < 0 ? 'text-rose-500' : 'text-emerald-600'}`}>
+                        ¥{Math.max(0, (Number(checkoutModal.received) || 0) - cartTotal).toLocaleString()}
                       </span>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-4 gap-2 sm:gap-3 flex-1 min-h-0">
-                    <button onClick={() => handleNumpadClick('EXACT')} className="h-full min-h-[40px] flex justify-center items-center text-[10px] sm:text-xs bg-indigo-100 text-indigo-700 font-black rounded-xl hover:bg-indigo-200 active:scale-95 transition-transform shadow-sm whitespace-nowrap">ぴったり</button>
-                    <button onClick={() => handleNumpadClick(1000)} className="h-full min-h-[40px] flex justify-center items-center text-xs bg-white text-gray-700 font-black rounded-xl border border-gray-200 hover:bg-gray-50 shadow-sm active:scale-95 transition-transform">¥1,000</button>
-                    <button onClick={() => handleNumpadClick(5000)} className="h-full min-h-[40px] flex justify-center items-center text-xs bg-white text-gray-700 font-black rounded-xl border border-gray-200 hover:bg-gray-50 shadow-sm active:scale-95 transition-transform">¥5,000</button>
-                    <button onClick={() => handleNumpadClick(10000)} className="h-full min-h-[40px] flex justify-center items-center text-[10px] sm:text-xs bg-white text-gray-700 font-black rounded-xl border border-gray-200 hover:bg-gray-50 shadow-sm active:scale-95 transition-transform">¥10,000</button>
-                    <button onClick={() => handleNumpadClick('7')} className="h-full min-h-[40px] flex justify-center items-center text-xl sm:text-2xl font-black bg-white rounded-xl shadow-sm border border-gray-100 active:bg-gray-100 active:scale-95 transition-all text-gray-800">7</button>
-                    <button onClick={() => handleNumpadClick('8')} className="h-full min-h-[40px] flex justify-center items-center text-xl sm:text-2xl font-black bg-white rounded-xl shadow-sm border border-gray-100 active:bg-gray-100 active:scale-95 transition-all text-gray-800">8</button>
-                    <button onClick={() => handleNumpadClick('9')} className="h-full min-h-[40px] flex justify-center items-center text-xl sm:text-2xl font-black bg-white rounded-xl shadow-sm border border-gray-100 active:bg-gray-100 active:scale-95 transition-all text-gray-800">9</button>
-                    <button onClick={() => handleNumpadClick('BS')} className="h-full min-h-[40px] flex justify-center items-center text-lg sm:text-xl font-black bg-red-50 text-red-600 rounded-xl shadow-sm border border-red-100 active:bg-red-100 active:scale-95 transition-all">⌫</button>
-                    <button onClick={() => handleNumpadClick('4')} className="h-full min-h-[40px] flex justify-center items-center text-xl sm:text-2xl font-black bg-white rounded-xl shadow-sm border border-gray-100 active:bg-gray-100 active:scale-95 transition-all text-gray-800">4</button>
-                    <button onClick={() => handleNumpadClick('5')} className="h-full min-h-[40px] flex justify-center items-center text-xl sm:text-2xl font-black bg-white rounded-xl shadow-sm border border-gray-100 active:bg-gray-100 active:scale-95 transition-all text-gray-800">5</button>
-                    <button onClick={() => handleNumpadClick('6')} className="h-full min-h-[40px] flex justify-center items-center text-xl sm:text-2xl font-black bg-white rounded-xl shadow-sm border border-gray-100 active:bg-gray-100 active:scale-95 transition-all text-gray-800">6</button>
-                    <button onClick={() => handleNumpadClick('C')} className="h-full min-h-[40px] flex justify-center items-center text-lg sm:text-xl font-black bg-red-50 text-red-600 rounded-xl shadow-sm border border-red-100 active:bg-red-100 active:scale-95 transition-all">C</button>
-                    <button onClick={() => handleNumpadClick('1')} className="h-full min-h-[40px] flex justify-center items-center text-xl sm:text-2xl font-black bg-white rounded-xl shadow-sm border border-gray-100 active:bg-gray-100 active:scale-95 transition-all text-gray-800">1</button>
-                    <button onClick={() => handleNumpadClick('2')} className="h-full min-h-[40px] flex justify-center items-center text-xl sm:text-2xl font-black bg-white rounded-xl shadow-sm border border-gray-100 active:bg-gray-100 active:scale-95 transition-all text-gray-800">2</button>
-                    <button onClick={() => handleNumpadClick('3')} className="h-full min-h-[40px] flex justify-center items-center text-xl sm:text-2xl font-black bg-white rounded-xl shadow-sm border border-gray-100 active:bg-gray-100 active:scale-95 transition-all text-gray-800">3</button>
+                  <div className="grid grid-cols-4 gap-1.5 mb-2 shrink-0">
+                    <button onClick={() => handleNumpadClick('EXACT')} className="py-2 bg-indigo-600 text-white text-xs font-black rounded-xl shadow-xs active:scale-95">ぴったり</button>
+                    <button onClick={() => handleNumpadClick(1000, 'add')} className="py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-black rounded-xl active:scale-95">+¥1,000</button>
+                    <button onClick={() => handleNumpadClick(500, 'add')} className="py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-black rounded-xl active:scale-95">+¥500</button>
+                    <button onClick={() => handleNumpadClick(100, 'add')} className="py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-black rounded-xl active:scale-95">+¥100</button>
+                  </div>
+
+                  <div className="grid grid-cols-4 gap-2 flex-1 min-h-[230px]">
+                    <button onClick={() => setCheckoutModal(p => ({ ...p, received: '1000' }))} className="bg-white text-slate-700 font-black text-xs rounded-xl border border-slate-200 shadow-xs active:scale-95">¥1,000</button>
+                    <button onClick={() => setCheckoutModal(p => ({ ...p, received: '2000' }))} className="bg-white text-slate-700 font-black text-xs rounded-xl border border-slate-200 shadow-xs active:scale-95">¥2,000</button>
+                    <button onClick={() => setCheckoutModal(p => ({ ...p, received: '5000' }))} className="bg-white text-slate-700 font-black text-xs rounded-xl border border-slate-200 shadow-xs active:scale-95">¥5,000</button>
+                    <button onClick={() => setCheckoutModal(p => ({ ...p, received: '10000' }))} className="bg-white text-slate-700 font-black text-xs rounded-xl border border-slate-200 shadow-xs active:scale-95">¥10,000</button>
+
+                    <button onClick={() => handleNumpadClick('7')} className="text-xl font-black bg-white rounded-xl shadow-xs border border-slate-100 active:bg-slate-100">7</button>
+                    <button onClick={() => handleNumpadClick('8')} className="text-xl font-black bg-white rounded-xl shadow-xs border border-slate-100 active:bg-slate-100">8</button>
+                    <button onClick={() => handleNumpadClick('9')} className="text-xl font-black bg-white rounded-xl shadow-xs border border-slate-100 active:bg-slate-100">9</button>
+                    <button onClick={() => handleNumpadClick('BS')} className="text-lg font-black bg-amber-50 text-amber-700 rounded-xl border border-amber-200 active:bg-amber-100">⌫</button>
+
+                    <button onClick={() => handleNumpadClick('4')} className="text-xl font-black bg-white rounded-xl shadow-xs border border-slate-100 active:bg-slate-100">4</button>
+                    <button onClick={() => handleNumpadClick('5')} className="text-xl font-black bg-white rounded-xl shadow-xs border border-slate-100 active:bg-slate-100">5</button>
+                    <button onClick={() => handleNumpadClick('6')} className="text-xl font-black bg-white rounded-xl shadow-xs border border-slate-100 active:bg-slate-100">6</button>
+                    <button onClick={() => handleNumpadClick('C')} className="text-sm font-black bg-rose-50 text-rose-600 rounded-xl border border-rose-200 active:bg-rose-100">クリア</button>
+
+                    <button onClick={() => handleNumpadClick('1')} className="text-xl font-black bg-white rounded-xl shadow-xs border border-slate-100 active:bg-slate-100">1</button>
+                    <button onClick={() => handleNumpadClick('2')} className="text-xl font-black bg-white rounded-xl shadow-xs border border-slate-100 active:bg-slate-100">2</button>
+                    <button onClick={() => handleNumpadClick('3')} className="text-xl font-black bg-white rounded-xl shadow-xs border border-slate-100 active:bg-slate-100">3</button>
                     <button 
                       onClick={processCheckout}
-                      className={`row-span-2 h-full min-h-[40px] rounded-xl font-black text-white shadow-lg flex flex-col justify-center items-center transition-all ${Number(checkoutModal.received) >= cartTotal ? 'bg-indigo-600 hover:bg-indigo-700 active:scale-95 hover:shadow-indigo-500/40' : 'bg-gray-300 cursor-not-allowed shadow-none text-gray-400'}`}
+                      disabled={(Number(checkoutModal.received) || 0) < cartTotal}
+                      className={`row-span-2 rounded-xl font-black text-white shadow-lg flex flex-col justify-center items-center transition-all ${
+                        (Number(checkoutModal.received) || 0) >= cartTotal
+                          ? 'bg-emerald-600 hover:bg-emerald-700 active:scale-95'
+                          : 'bg-slate-300 cursor-not-allowed text-slate-400 shadow-none'
+                      }`}
                     >
-                      <Check size={28} className="mb-1"/> 会計
+                      <Check size={26} className="mb-0.5"/> 確定
                     </button>
-                    <button onClick={() => handleNumpadClick('0')} className="col-span-2 h-full min-h-[40px] flex justify-center items-center text-xl sm:text-2xl font-black bg-white rounded-xl shadow-sm border border-gray-100 active:bg-gray-100 active:scale-95 transition-all text-gray-800">0</button>
-                    <button onClick={() => handleNumpadClick('00')} className="h-full min-h-[40px] flex justify-center items-center text-xl sm:text-2xl font-black bg-white rounded-xl shadow-sm border border-gray-100 active:bg-gray-100 active:scale-95 transition-all text-gray-800">00</button>
+
+                    <button onClick={() => handleNumpadClick('0')} className="col-span-2 text-xl font-black bg-white rounded-xl shadow-xs border border-slate-100 active:bg-slate-100">0</button>
+                    <button onClick={() => handleNumpadClick('00')} className="text-xl font-black bg-white rounded-xl shadow-xs border border-slate-100 active:bg-slate-100">00</button>
                   </div>
                 </div>
               </div>
             </div>
           )}
 
+          {/* キリ番演出モーダル */}
           {luckyModal.isOpen && (
-            <div className="fixed inset-0 bg-gray-900/80 backdrop-blur-md flex items-center justify-center z-[9999] p-4">
-              <div className="bg-gradient-to-br from-yellow-400 via-orange-400 to-orange-600 rounded-[2rem] p-8 sm:p-10 max-w-md w-full text-center shadow-2xl animate-bounce border-4 border-white/30">
-                <Trophy size={80} className="mx-auto text-white mb-6 drop-shadow-md" />
-                <h2 className="text-2xl sm:text-3xl font-black text-white whitespace-pre-wrap leading-relaxed drop-shadow-lg">
+            <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-[9999] p-4">
+              <div className="bg-gradient-to-br from-amber-400 via-orange-400 to-rose-500 rounded-[2rem] p-8 max-w-md w-full text-center shadow-2xl border-4 border-white/40 animate-fade-in-up">
+                <Trophy size={64} className="mx-auto text-white mb-3 drop-shadow-md" />
+                <h2 className="text-2xl font-black text-white whitespace-pre-wrap leading-relaxed drop-shadow">
                   {luckyModal.message}
                 </h2>
                 <button 
                   onClick={() => setLuckyModal({ isOpen: false, message: '' })}
-                  className="mt-10 bg-white text-orange-600 font-black py-4 px-10 rounded-full shadow-xl hover:scale-105 active:scale-95 transition-transform text-lg"
+                  className="mt-6 bg-white text-orange-600 font-black py-3 px-8 rounded-full shadow-xl hover:scale-105 active:scale-95 transition-transform text-sm"
                 >
-                  閉じる
+                  OK！閉じる
                 </button>
               </div>
             </div>
           )}
 
-          {cancelModal.isOpen && (
-            <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-4">
-              <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl animate-fade-in-up">
-                <div className="flex items-center text-red-600 mb-4">
-                  <AlertCircle size={28} className="mr-2" />
-                  <h3 className="text-xl font-black">取引の取消（返品）</h3>
-                </div>
-                <p className="text-gray-600 font-bold mb-4 text-sm leading-relaxed">
-                  この取引を取り消しますか？<br/>
-                  <span className="text-red-500">※売上から減算され、商品の在庫が元に戻ります。</span>
-                </p>
-                <div className="bg-gray-50 p-3 rounded-xl mb-6 border border-gray-200">
-                  <div className="font-bold text-gray-800 text-sm mb-1">{cancelModal.sale?.time.toLocaleTimeString()} の取引</div>
-                  <div className="text-xs text-gray-500 mb-2 truncate">
-                    {cancelModal.sale?.items.map(i => i.name).join(', ')}
-                  </div>
-                  <div className="font-black text-indigo-700">返金額: ¥{cancelModal.sale?.total.toLocaleString()}</div>
-                </div>
-                <div className="flex space-x-3">
-                  <button onClick={() => setCancelModal({ isOpen: false, sale: null })} className="flex-1 p-3 bg-gray-100 text-gray-600 rounded-xl font-bold hover:bg-gray-200 transition-colors">キャンセル</button>
-                  <button onClick={confirmCancelSale} className="flex-1 p-3 bg-red-500 text-white rounded-xl font-bold hover:bg-red-600 flex justify-center items-center transition-colors shadow-sm"><Undo2 size={18} className="mr-1" /> 取消を実行</button>
-                </div>
-              </div>
-            </div>
-          )}
-
+          {/* 値引きモーダル */}
           {discountModal.isOpen && (
-            <div className="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-4">
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4">
               <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl animate-fade-in-up">
-                <div className="flex justify-between items-center mb-6">
-                  <h3 className="text-xl font-black text-gray-800">割引金額を入力</h3>
-                  <button onClick={() => setDiscountModal({ ...discountModal, isOpen: false })} className="p-2 bg-gray-100 rounded-full text-gray-500 hover:bg-gray-200 hover:text-gray-800 transition-colors"><X size={20}/></button>
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-black text-slate-800">値引き金額を入力</h3>
+                  <button onClick={() => setDiscountModal({ ...discountModal, isOpen: false })} className="p-2 bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200"><X size={18}/></button>
                 </div>
-                <div className="mb-6 relative">
-                  <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-500 font-bold">¥</span>
+                <div className="flex gap-2 mb-3">
+                  {[50, 100, 150, 200].map(preset => (
+                    <button
+                      key={preset}
+                      onClick={() => setDiscountModal({ ...discountModal, amount: String(preset) })}
+                      className="flex-1 py-2 bg-indigo-50 text-indigo-700 rounded-xl font-black text-xs border border-indigo-100 hover:bg-indigo-100"
+                    >
+                      -¥{preset}
+                    </button>
+                  ))}
+                </div>
+                <div className="mb-5 relative">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-black">¥</span>
                   <input
                     type="number"
                     min="0"
                     value={discountModal.amount}
                     onChange={(e) => setDiscountModal({ ...discountModal, amount: e.target.value })}
                     placeholder="例: 100"
-                    className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white font-black text-xl outline-none transition-all"
-                    autoFocus
+                    className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white font-black text-xl outline-none"
                   />
                 </div>
                 <button
                   onClick={applyDiscount}
                   disabled={!discountModal.amount || Number(discountModal.amount) <= 0}
-                  className={`w-full py-3 rounded-xl font-bold text-lg flex justify-center items-center transition-colors shadow-sm ${
+                  className={`w-full py-3.5 rounded-xl font-black text-base flex justify-center items-center transition-colors ${
                     !discountModal.amount || Number(discountModal.amount) <= 0
-                      ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                      : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                      : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-md'
                   }`}
                 >
-                  <Minus size={20} className="mr-1"/> 割引を適用する
+                  <Minus size={18} className="mr-1"/> 割引をカートに追加
                 </button>
               </div>
             </div>
+          )}
+
+          {/* 返金・取消総合モーダル */}
+          {refundModal.isOpen && refundModal.sale && (
+            <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center z-[9999] p-3 sm:p-4">
+              <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl flex flex-col max-h-[92vh] overflow-hidden animate-fade-in-up border border-slate-200">
+                <div className="bg-rose-600 text-white p-4 flex justify-between items-center shrink-0">
+                  <div className="flex items-center space-x-2">
+                    <RotateCcw size={22} className="text-rose-200" />
+                    <div>
+                      <h3 className="font-black text-base sm:text-lg leading-tight">返金・注文取消の処理</h3>
+                      <p className="text-[11px] text-rose-100 font-bold">
+                        {new Date(refundModal.sale.timeIso).toLocaleTimeString('ja-JP')} の会計 (担当: {refundModal.sale.staff})
+                      </p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setRefundModal(p => ({ ...p, isOpen: false, sale: null }))}
+                    className="p-1.5 bg-white/10 hover:bg-white/20 rounded-full text-white"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+
+                <div className="p-4 sm:p-5 overflow-y-auto space-y-4 text-xs sm:text-sm">
+                  {(refundModal.sale.isCancelled || refundModal.sale.status === 'cancelled') ? (
+                    <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 text-center space-y-3">
+                      <div className="flex items-center justify-center text-rose-600 font-black text-sm">
+                        <AlertTriangle size={18} className="mr-1.5" /> この取引は既に取り消し済みです
+                      </div>
+                      <p className="text-slate-600 text-xs">
+                        取消理由: <span className="font-bold text-slate-800">{refundModal.sale.cancelReason || '未設定'}</span>
+                      </p>
+                      <button
+                        onClick={() => handleRestoreSale(refundModal.sale)}
+                        className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-black text-xs sm:text-sm shadow-md flex items-center justify-center"
+                      >
+                        <Undo2 size={16} className="mr-1.5" /> この取引を取り消し解除（復元）する
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex bg-slate-100 p-1 rounded-xl">
+                        <button
+                          type="button"
+                          onClick={() => setRefundModal(p => ({ ...p, mode: 'full' }))}
+                          className={`flex-1 py-2 rounded-lg font-black text-xs transition-all ${
+                            refundModal.mode === 'full' 
+                              ? 'bg-white text-rose-600 shadow-xs' 
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          全額取り消し（会計まるごと返金）
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setRefundModal(p => ({ ...p, mode: 'partial' }))}
+                          className={`flex-1 py-2 rounded-lg font-black text-xs transition-all ${
+                            refundModal.mode === 'partial' 
+                              ? 'bg-white text-indigo-700 shadow-xs' 
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          一部商品の返品・部分返金
+                        </button>
+                      </div>
+
+                      <div className="bg-slate-50 rounded-2xl p-3 border border-slate-200 space-y-2">
+                        <div className="text-xs font-black text-slate-500 mb-1">注文商品一覧</div>
+                        {(refundModal.sale.items || []).map(item => {
+                          const originalQty = item.quantity || 1;
+                          const alreadyReturned = item.returnedQuantity || 0;
+                          const availableForReturn = Math.max(0, originalQty - alreadyReturned);
+                          const currentSelectedReturn = refundModal.returnQuantities[item.cartItemId] || 0;
+
+                          return (
+                            <div key={item.cartItemId} className="bg-white p-2.5 rounded-xl border border-slate-200 flex items-center justify-between">
+                              <div className="flex-1 min-w-0 pr-2">
+                                <div className="font-black text-slate-800 text-xs sm:text-sm truncate">
+                                  {item.name} {item.selectedFlavor && <span className="text-indigo-600 font-bold">({item.selectedFlavor})</span>}
+                                </div>
+                                <div className="text-[11px] text-slate-400 font-bold">
+                                  ¥{Number(item.price).toLocaleString()} × {originalQty}点
+                                  {alreadyReturned > 0 && <span className="ml-1.5 text-rose-500 font-black">（返品済: {alreadyReturned}点）</span>}
+                                </div>
+                              </div>
+
+                              {refundModal.mode === 'partial' ? (
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-[10px] text-slate-400 font-bold">返品:</span>
+                                  <div className="flex items-center bg-slate-100 rounded-lg p-0.5 border border-slate-200">
+                                    <button
+                                      type="button"
+                                      disabled={currentSelectedReturn <= 0}
+                                      onClick={() => {
+                                        setRefundModal(p => ({
+                                          ...p,
+                                          returnQuantities: {
+                                            ...p.returnQuantities,
+                                            [item.cartItemId]: Math.max(0, currentSelectedReturn - 1)
+                                          }
+                                        }));
+                                      }}
+                                      className="w-6 h-6 flex items-center justify-center rounded bg-white text-slate-700 disabled:opacity-30 font-bold"
+                                    >
+                                      -
+                                    </button>
+                                    <span className="w-6 text-center font-black text-xs">{currentSelectedReturn}</span>
+                                    <button
+                                      type="button"
+                                      disabled={currentSelectedReturn >= availableForReturn}
+                                      onClick={() => {
+                                        setRefundModal(p => ({
+                                          ...p,
+                                          returnQuantities: {
+                                            ...p.returnQuantities,
+                                            [item.cartItemId]: Math.min(availableForReturn, currentSelectedReturn + 1)
+                                          }
+                                        }));
+                                      }}
+                                      className="w-6 h-6 flex items-center justify-center rounded bg-white text-indigo-700 disabled:opacity-30 font-bold"
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="text-right font-black text-slate-800 text-xs">
+                                  ¥{(Number(item.price) * availableForReturn).toLocaleString()}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 flex items-center justify-between">
+                        <div>
+                          <div className="font-black text-slate-800 text-xs sm:text-sm">商品の在庫を元に戻す</div>
+                          <div className="text-[11px] text-slate-500 font-bold">未開封やレジ打ち間違いの場合はON、落として破棄する場合はOFF</div>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-3">
+                          <input
+                            type="checkbox"
+                            checked={refundModal.restock}
+                            onChange={(e) => setRefundModal(p => ({ ...p, restock: e.target.checked }))}
+                            className="sr-only peer"
+                          />
+                          <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                        </label>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-black text-slate-700 mb-1.5">返金・取消の理由</label>
+                        <select
+                          value={refundModal.reason}
+                          onChange={(e) => setRefundModal(p => ({ ...p, reason: e.target.value }))}
+                          className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs sm:text-sm outline-none focus:ring-2 focus:ring-rose-500"
+                        >
+                          {REFUND_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+                        </select>
+                        {refundModal.reason === 'その他' && (
+                          <input
+                            type="text"
+                            placeholder="具体的な理由を入力してください"
+                            value={refundModal.customReason}
+                            onChange={(e) => setRefundModal(p => ({ ...p, customReason: e.target.value }))}
+                            className="w-full mt-2 p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-rose-500 font-bold"
+                          />
+                        )}
+                      </div>
+
+                      {(() => {
+                        let refundAmountPreview = 0;
+                        if (refundModal.mode === 'full') {
+                          refundAmountPreview = getSaleNetTotal(refundModal.sale);
+                        } else {
+                          (refundModal.sale.items || []).forEach(item => {
+                            const count = refundModal.returnQuantities[item.cartItemId] || 0;
+                            refundAmountPreview += (Number(item.price) || 0) * count;
+                          });
+                        }
+
+                        return (
+                          <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex justify-between items-center">
+                            <div>
+                              <div className="text-xs text-rose-700 font-bold">お客様への返金額（レジ出金）</div>
+                              <div className="text-[10px] text-rose-500">※売上集計から差し引かれます</div>
+                            </div>
+                            <div className="text-2xl sm:text-3xl font-black text-rose-600">
+                              ¥{refundAmountPreview.toLocaleString()}
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      <div className="flex gap-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => setRefundModal(p => ({ ...p, isOpen: false, sale: null }))}
+                          className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs sm:text-sm"
+                        >
+                          閉じる
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleExecuteRefund}
+                          className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-black text-xs sm:text-sm shadow-md flex items-center justify-center transition-colors active:scale-98"
+                        >
+                          <Check size={16} className="mr-1" /> 返金・取消を確定する
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 使い方説明書（マニュアル）モーダル */}
+          {helpModalOpen && (
+            <HelpManualModal onClose={() => setHelpModalOpen(false)} />
           )}
         </div>
       );
     }
 
-    // === サブコンポーネント（ダッシュボード等） ===
-    function DashboardTab({ totalSales, goalAmount, goalProgress, salesHistory, validSalesCount, hourlyData, maxHourlySales, staffRanking, csvFileName, setCsvFileName, handleExportCSV, onCancelSale }) {
+    function DashboardTab({
+      salesMetrics, goalAmount, goalProgress, salesHistory,
+      hourlyData, maxHourlySales, staffRanking, productRanking,
+      csvFileName, setCsvFileName, handleExportCSV, onOpenRefundModal, getSaleNetTotal
+    }) {
+      const avgSpend = salesMetrics.validTransactions > 0 
+        ? Math.round(salesMetrics.netSales / salesMetrics.validTransactions) 
+        : 0;
+
       return (
-        <div className="p-4 md:p-6 h-full overflow-y-auto bg-gray-50 pb-24 md:pb-6">
-          <div className="max-w-6xl mx-auto">
-            <h2 className="text-2xl font-black mb-6 flex items-center text-gray-800 tracking-tight"><BarChart3 className="mr-3 text-indigo-600" size={28} /> リアルタイム集計</h2>
+        <div className="p-4 md:p-6 h-full overflow-y-auto bg-slate-50 pb-24 md:pb-8">
+          <div className="max-w-6xl mx-auto space-y-6">
+            <h2 className="text-2xl font-black flex items-center text-slate-800 tracking-tight">
+              <BarChart3 className="mr-2.5 text-indigo-600" size={26} /> リアルタイム売上集計
+            </h2>
             
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-6">
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-1.5 h-full bg-indigo-500"></div>
-                <div className="text-gray-500 text-sm font-bold mb-2">総売上金額</div>
-                <div className="text-4xl font-black text-indigo-700 tracking-tight">¥{totalSales.toLocaleString()}</div>
+            {/* KPIサマリーカード */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+              <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-xs border border-slate-200">
+                <div className="text-slate-500 text-xs font-bold mb-1">純売上金額（返金控除済）</div>
+                <div className="text-2xl sm:text-3xl font-black text-indigo-700">¥{salesMetrics.netSales.toLocaleString()}</div>
+                {salesMetrics.totalRefunded > 0 && (
+                  <div className="text-[11px] text-rose-500 font-bold mt-1">返金計: -¥{salesMetrics.totalRefunded.toLocaleString()}</div>
+                )}
               </div>
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-1.5 h-full bg-emerald-500"></div>
-                <div className="text-gray-500 text-sm font-bold mb-2">総客数 (会計回数)</div>
-                <div className="text-4xl font-black text-emerald-600 tracking-tight">{validSalesCount} <span className="text-lg font-bold text-emerald-600/70">人</span></div>
+              <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-xs border border-slate-200">
+                <div className="text-slate-500 text-xs font-bold mb-1">有効組数（客数）</div>
+                <div className="text-2xl sm:text-3xl font-black text-emerald-600">
+                  {salesMetrics.validTransactions} <span className="text-sm font-bold">組</span>
+                </div>
+                {salesMetrics.cancelledTransactions > 0 && (
+                  <div className="text-[11px] text-slate-400 font-bold mt-1">全取消: {salesMetrics.cancelledTransactions}件</div>
+                )}
               </div>
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-1.5 h-full bg-amber-500"></div>
-                <div className="text-gray-500 text-sm font-bold mb-2">目標達成率 ({goalAmount.toLocaleString()}円)</div>
-                <div className="text-4xl font-black text-amber-500 tracking-tight">{Math.round(goalProgress)}%</div>
+              <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-xs border border-slate-200">
+                <div className="text-slate-500 text-xs font-bold mb-1">平均客単価</div>
+                <div className="text-2xl sm:text-3xl font-black text-slate-800">¥{avgSpend.toLocaleString()}</div>
+              </div>
+              <div className="bg-white p-4 sm:p-5 rounded-2xl shadow-xs border border-slate-200">
+                <div className="text-slate-500 text-xs font-bold mb-1">目標達成率 (¥{goalAmount.toLocaleString()})</div>
+                <div className="text-2xl sm:text-3xl font-black text-amber-500">{Math.round(goalProgress)}%</div>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 lg:col-span-2">
-                <h3 className="font-bold mb-6 flex items-center text-gray-700 text-lg"><Clock size={20} className="mr-2 text-gray-400"/> 時間帯別売上</h3>
-                <div className="h-56 flex items-end space-x-2 border-b border-gray-200 pb-2">
+            {/* 時間帯・商品別・スタッフ別グリッド */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              {/* 時間帯別売上 */}
+              <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200 lg:col-span-5 flex flex-col">
+                <h3 className="font-black mb-4 flex items-center text-slate-800 text-base">
+                  <Clock size={18} className="mr-2 text-indigo-500"/> 時間帯別売上 (8時〜20時)
+                </h3>
+                <div className="h-52 flex items-end space-x-1.5 border-b border-slate-200 pb-2 mt-auto">
                   {hourlyData.map(d => (
                     <div key={d.hour} className="flex-1 flex flex-col items-center justify-end h-full group relative">
-                      <div className="opacity-0 group-hover:opacity-100 absolute -top-10 bg-gray-800 text-white text-xs py-1.5 px-3 rounded-lg pointer-events-none transition-opacity whitespace-nowrap z-10 font-bold shadow-lg">
-                        ¥{d.sales.toLocaleString()}
+                      <div className="opacity-0 group-hover:opacity-100 absolute -top-9 bg-slate-900 text-white text-[10px] py-1 px-2 rounded pointer-events-none transition-opacity whitespace-nowrap z-10 font-bold shadow-md">
+                        ¥{d.sales.toLocaleString()} ({d.count}組)
                       </div>
                       <div 
-                        className="w-full max-w-[40px] bg-indigo-200 rounded-t-md transition-all duration-500 hover:bg-indigo-500" 
-                        style={{ height: `${(d.sales / maxHourlySales) * 100}%`, minHeight: d.sales > 0 ? '8px' : '0' }}
+                        className="w-full bg-indigo-500/80 hover:bg-indigo-600 rounded-t transition-all duration-300" 
+                        style={{ height: `${(d.sales / maxHourlySales) * 100}%`, minHeight: d.sales > 0 ? '6px' : '0' }}
                       ></div>
-                      <span className="text-[10px] text-gray-400 mt-2 font-bold">{d.hour}時</span>
+                      <span className="text-[10px] text-slate-400 mt-1.5 font-bold">{d.hour}</span>
                     </div>
                   ))}
                 </div>
               </div>
 
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-                <h3 className="font-bold mb-5 flex items-center text-gray-700 text-lg"><Trophy size={20} className="mr-2 text-amber-500"/> 販売王ランキング</h3>
-                <div className="space-y-3">
-                  {staffRanking.map((s, idx) => (
-                    <div key={s.name} className="flex items-center justify-between p-3 rounded-xl bg-gray-50 border border-gray-100 hover:bg-gray-100 transition-colors">
-                      <div className="flex items-center">
-                        <span className={`w-8 h-8 flex justify-center items-center rounded-full text-sm font-black mr-3 shadow-sm ${idx === 0 ? 'bg-gradient-to-br from-yellow-300 to-yellow-500 text-white' : idx === 1 ? 'bg-gradient-to-br from-gray-300 to-gray-400 text-white' : idx === 2 ? 'bg-gradient-to-br from-orange-300 to-orange-400 text-white' : 'bg-white border border-gray-200 text-gray-400'}`}>
-                          {idx + 1}
-                        </span>
-                        <span className="font-bold text-gray-800">{s.name}</span>
+              {/* 商品別ランキング（返品控除後の実質販売数） */}
+              <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200 lg:col-span-4 flex flex-col">
+                <h3 className="font-black mb-4 flex items-center text-slate-800 text-base">
+                  <Package size={18} className="mr-2 text-emerald-500"/> 商品・味別 販売数 (純販売)
+                </h3>
+                <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
+                  {productRanking.length === 0 ? (
+                    <div className="text-center text-slate-400 text-xs font-bold py-12">まだ販売データがありません</div>
+                  ) : (
+                    productRanking.map((prod, idx) => (
+                      <div key={prod.key} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs">
+                        <div className="flex items-center min-w-0 pr-2">
+                          <span className="w-6 h-6 flex justify-center items-center rounded-full bg-emerald-100 text-emerald-800 font-black mr-2.5 shrink-0">
+                            {idx + 1}
+                          </span>
+                          <span className="font-bold text-slate-800 truncate">{prod.key}</span>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <span className="font-black text-emerald-600 text-sm">{prod.qty}個</span>
+                          <span className="block text-[10px] text-slate-400 font-bold">¥{prod.revenue.toLocaleString()}</span>
+                        </div>
                       </div>
-                      <div className="text-indigo-600 font-black">¥{s.sales.toLocaleString()}</div>
-                    </div>
-                  ))}
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* 担当別ランキング */}
+              <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200 lg:col-span-3 flex flex-col">
+                <h3 className="font-black mb-4 flex items-center text-slate-800 text-base">
+                  <Trophy size={18} className="mr-2 text-amber-500"/> 担当別ランキング
+                </h3>
+                <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
+                  {staffRanking.length === 0 ? (
+                    <div className="text-center text-slate-400 text-xs font-bold py-12">データなし</div>
+                  ) : (
+                    staffRanking.map((s, idx) => (
+                      <div key={s.name} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs">
+                        <div className="flex items-center truncate pr-2">
+                          <span className={`w-6 h-6 flex justify-center items-center rounded-full font-black mr-2 shrink-0 ${
+                            idx === 0 ? 'bg-amber-400 text-white' : idx === 1 ? 'bg-slate-400 text-white' : 'bg-white border border-slate-200 text-slate-500'
+                          }`}>
+                            {idx + 1}
+                          </span>
+                          <span className="font-bold text-slate-800 truncate">{s.name}</span>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <span className="text-indigo-600 font-black">¥{s.sales.toLocaleString()}</span>
+                          <span className="block text-[10px] text-slate-400 font-bold">{s.count}組</span>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             </div>
             
-            <div className="mt-6 bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
-                <h3 className="font-bold text-gray-700 flex items-center text-lg">最近の取引履歴</h3>
-                <div className="flex items-center bg-gray-50 p-1.5 rounded-xl border border-gray-200 w-full sm:w-auto">
+            {/* 最近の会計履歴 */}
+            <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-3">
+                <div>
+                  <h3 className="font-black text-slate-800 text-base">最近の会計履歴（直近30件）</h3>
+                  <p className="text-xs text-slate-400 font-bold">行の「返金・取消」ボタンから全額取消や一部商品の返品が可能です</p>
+                </div>
+                <div className="flex items-center bg-slate-50 p-1 rounded-xl border border-slate-200 w-full sm:w-auto">
                   <input 
                     type="text" value={csvFileName} onChange={(e) => setCsvFileName(e.target.value)}
                     placeholder="ファイル名"
-                    className="p-2 px-3 bg-transparent rounded-lg text-sm w-full sm:w-32 outline-none font-bold text-gray-700"
+                    className="p-1.5 px-3 bg-transparent rounded-lg text-xs w-full sm:w-36 outline-none font-bold text-slate-700"
                   />
-                  <span className="text-sm text-gray-400 font-bold mr-2">.csv</span>
-                  <button onClick={handleExportCSV} className="bg-emerald-500 hover:bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center transition-colors shadow-sm whitespace-nowrap">
-                    <Download size={16} className="mr-1.5" /> 出力
+                  <span className="text-xs text-slate-400 font-bold mr-2">.csv</span>
+                  <button onClick={handleExportCSV} className="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-1.5 rounded-lg text-xs font-black flex items-center transition-colors shadow-xs whitespace-nowrap active:scale-95">
+                    <Download size={14} className="mr-1" /> CSV出力
                   </button>
                 </div>
               </div>
               
               <div className="overflow-x-auto">
-                <table className="w-full text-sm text-left">
-                  <thead className="bg-gray-50 text-gray-500 border-y border-gray-200 uppercase text-xs tracking-wider">
+                <table className="w-full text-xs sm:text-sm text-left">
+                  <thead className="bg-slate-50 text-slate-500 border-y border-slate-200 text-xs">
                     <tr>
-                      <th className="p-4 font-bold">時間</th>
-                      <th className="p-4 font-bold">内容</th>
-                      <th className="p-4 font-bold">金額</th>
-                      <th className="p-4 font-bold">担当者</th>
-                      <th className="p-4 font-bold text-center">操作</th>
+                      <th className="p-3 font-bold">時刻</th>
+                      <th className="p-3 font-bold">注文内容</th>
+                      <th className="p-3 font-bold">金額</th>
+                      <th className="p-3 font-bold">担当</th>
+                      <th className="p-3 font-bold text-center">状態 / 返金</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {salesHistory.slice().reverse().slice(0, 15).map((sale) => (
-                      <tr key={sale.id} className={`transition-colors ${sale.isCancelled ? 'bg-gray-50 opacity-60' : 'hover:bg-indigo-50/50'}`}>
-                        <td className={`p-4 font-medium whitespace-nowrap ${sale.isCancelled ? 'text-gray-400 line-through' : 'text-gray-500'}`}>{sale.time.toLocaleTimeString()}</td>
-                        <td className={`p-4 font-medium ${sale.isCancelled ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
-                          {sale.items.map(item => `${item.name}${item.selectedFlavor ? `(${item.selectedFlavor})` : ''}`).join(', ')}
-                        </td>
-                        <td className={`p-4 font-black whitespace-nowrap ${sale.isCancelled ? 'text-gray-400 line-through' : 'text-indigo-600'}`}>¥{sale.total}</td>
-                        <td className="p-4 text-gray-600 whitespace-nowrap">
-                          <span className="bg-gray-100 px-2 py-1 rounded text-xs font-bold">{sale.staff}</span>
-                        </td>
-                        <td className="p-4 text-center whitespace-nowrap">
-                          {sale.isCancelled ? (
-                            <span className="text-[10px] font-bold text-red-500 border border-red-200 bg-red-50 px-2 py-1 rounded-md">取消済</span>
-                          ) : (
-                            <button onClick={() => onCancelSale(sale)} className="text-xs font-bold text-gray-500 hover:text-red-600 flex items-center justify-center w-full transition-colors"><Undo2 size={14} className="mr-1"/> 取消</button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                  <tbody className="divide-y divide-slate-100">
+                    {salesHistory.slice().reverse().slice(0, 30).map((sale) => {
+                      const d = new Date(sale.timeIso || sale.time);
+                      const timeText = !isNaN(d.getTime()) ? d.toLocaleTimeString('ja-JP') : '';
+                      const isCancelled = sale.isCancelled || sale.status === 'cancelled';
+                      const isPartial = sale.status === 'partially_refunded';
+                      const net = getSaleNetTotal(sale);
+
+                      return (
+                        <tr key={sale.id} className={isCancelled ? 'bg-slate-50/80 opacity-60' : 'hover:bg-indigo-50/30'}>
+                          <td className={`p-3 font-bold whitespace-nowrap ${isCancelled ? 'line-through text-slate-400' : 'text-slate-500'}`}>
+                            {timeText}
+                          </td>
+                          <td className={`p-3 font-bold ${isCancelled ? 'line-through text-slate-400' : 'text-slate-800'}`}>
+                            <div className="flex flex-wrap gap-1 items-center">
+                              {(sale.items || []).map((item, idx) => {
+                                const ret = item.returnedQuantity || 0;
+                                return (
+                                  <span key={idx} className="inline-flex items-center">
+                                    {item.name}{item.selectedFlavor ? `(${item.selectedFlavor})` : ''}×{item.quantity || 1}
+                                    {ret > 0 && <span className="text-[10px] bg-rose-50 text-rose-600 px-1 py-0.2 rounded font-black ml-1">(返品{ret})</span>}
+                                    {idx < sale.items.length - 1 ? '、' : ''}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                            {sale.cancelReason && (
+                              <div className="text-[10px] text-rose-500 font-bold mt-0.5">
+                                理由: {sale.cancelReason}
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-3 whitespace-nowrap">
+                            {isCancelled ? (
+                              <span className="font-bold text-slate-400 line-through">¥{sale.total.toLocaleString()}</span>
+                            ) : isPartial ? (
+                              <div>
+                                <span className="font-black text-indigo-700">¥{net.toLocaleString()}</span>
+                                <span className="block text-[10px] text-rose-500 font-bold">返金 -¥{sale.refundAmount.toLocaleString()}</span>
+                              </div>
+                            ) : (
+                              <span className="font-black text-indigo-700">¥{sale.total.toLocaleString()}</span>
+                            )}
+                          </td>
+                          <td className="p-3 whitespace-nowrap">
+                            <span className="bg-slate-100 px-2 py-0.5 rounded text-xs font-bold text-slate-600">{sale.staff}</span>
+                          </td>
+                          <td className="p-3 text-center whitespace-nowrap">
+                            {isCancelled ? (
+                              <button 
+                                onClick={() => onOpenRefundModal(sale)}
+                                className="text-[11px] font-black text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2.5 py-1 rounded-lg inline-flex items-center"
+                              >
+                                取消済（詳細/復元）
+                              </button>
+                            ) : (
+                              <button 
+                                onClick={() => onOpenRefundModal(sale)} 
+                                className="text-xs font-black text-slate-600 hover:text-rose-600 hover:bg-rose-50 px-2.5 py-1 rounded-lg border border-slate-200 hover:border-rose-200 transition-colors inline-flex items-center"
+                              >
+                                <RotateCcw size={13} className="mr-1 text-rose-500"/> 返金・取消
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                     {salesHistory.length === 0 && (
-                      <tr><td colSpan="5" className="p-10 text-center text-gray-400 font-bold bg-gray-50/50 rounded-b-xl">まだ取引履歴がありません</td></tr>
+                      <tr><td colSpan="5" className="p-8 text-center text-slate-400 font-bold">まだ取引履歴がありません</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -745,7 +1889,7 @@
       );
     }
 
-    function CashierCloseTab({ totalSales, salesCount, startCounts, setStartCounts, endCounts, setEndCounts }) {
+    function CashierCloseTab({ salesMetrics, startCounts, setStartCounts, endCounts, setEndCounts }) {
       const moneyTypes = [
         { key: 'c10000', label: '10,000円', val: 10000 },
         { key: 'c5000', label: '5,000円', val: 5000 },
@@ -754,113 +1898,118 @@
         { key: 'c100', label: '100円', val: 100 },
         { key: 'c50', label: '50円', val: 50 },
         { key: 'c10', label: '10円', val: 10 },
+        { key: 'c5', label: '5円', val: 5 },
+        { key: 'c1', label: '1円', val: 1 },
       ];
 
-      const handleStartChange = (key, val) => {
+      const handleCountChange = (setter, counts, key, val) => {
         if (val === '') {
-          setStartCounts({...startCounts, [key]: ''});
+          setter({ ...counts, [key]: '' });
           return;
         }
-        const num = parseInt(val, 10);
-        if (!isNaN(num)) setStartCounts({...startCounts, [key]: num});
-      };
-
-      const handleEndChange = (key, val) => {
-        if (val === '') {
-          setEndCounts({...endCounts, [key]: ''});
-          return;
-        }
-        const num = parseInt(val, 10);
-        if (!isNaN(num)) setEndCounts({...endCounts, [key]: num});
+        const num = Math.max(0, parseInt(val, 10));
+        if (!isNaN(num)) setter({ ...counts, [key]: num });
       };
 
       const startCashTotal = moneyTypes.reduce((sum, mt) => sum + ((Number(startCounts[mt.key]) || 0) * mt.val), 0);
       const endCashTotal = moneyTypes.reduce((sum, mt) => sum + ((Number(endCounts[mt.key]) || 0) * mt.val), 0);
-      const expectedCash = startCashTotal + totalSales;
+      
+      const expectedCash = startCashTotal + salesMetrics.netSales;
       const difference = endCashTotal - expectedCash;
 
       return (
-        <div className="p-4 md:p-6 h-full overflow-y-auto bg-gray-50 pb-24 md:pb-6 flex justify-center">
+        <div className="p-4 md:p-6 h-full overflow-y-auto bg-slate-50 pb-24 md:pb-8 flex justify-center">
           <div className="w-full max-w-5xl">
-            <h2 className="text-2xl font-black mb-6 flex items-center text-gray-800 tracking-tight"><Target className="mr-3 text-indigo-600" size={28}/> レジ締め・現金確認</h2>
+            <h2 className="text-2xl font-black mb-6 flex items-center text-slate-800 tracking-tight">
+              <ClipboardCheck className="mr-2.5 text-indigo-600" size={26}/> レジ締め・現金照合
+            </h2>
             
             <div className="grid lg:grid-cols-3 gap-6">
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-                <h3 className="font-black text-gray-800 mb-4 flex items-center border-b border-gray-100 pb-3">
-                  <span className="bg-gray-800 text-white text-xs px-2.5 py-1 rounded-md mr-3">Step 1</span> 最初の準備金
+              {/* Step 1: つり銭準備金 */}
+              <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200">
+                <h3 className="font-black text-slate-800 mb-4 flex items-center border-b border-slate-100 pb-3 text-sm">
+                  <span className="bg-slate-800 text-white text-xs px-2 py-0.5 rounded mr-2">Step 1</span> 開始時の準備金（つり銭準備）
                 </h3>
-                <div className="space-y-3">
+                <div className="space-y-2.5">
                   {moneyTypes.map(item => (
-                    <div key={`start-${item.key}`} className="flex items-center justify-between">
-                      <label className="text-sm font-bold w-16 text-gray-600">{item.label}</label>
+                    <div key={`start-${item.key}`} className="flex items-center justify-between text-sm">
+                      <label className="font-bold text-slate-600">{item.label}</label>
                       <div className="flex items-center space-x-2">
                         <input 
                           type="number" min="0" 
                           value={startCounts[item.key] !== undefined ? startCounts[item.key] : ''} 
-                          onChange={(e) => handleStartChange(item.key, e.target.value)}
+                          onChange={(e) => handleCountChange(setStartCounts, startCounts, item.key, e.target.value)}
                           placeholder="0"
-                          className="w-16 p-1.5 border border-gray-300 rounded-lg text-right focus:ring-2 focus:ring-indigo-500 outline-none font-bold bg-gray-50" 
+                          className="w-20 p-1.5 border border-slate-300 rounded-lg text-right focus:ring-2 focus:ring-indigo-500 outline-none font-bold bg-slate-50" 
                         />
-                        <span className="text-gray-400 text-xs font-bold w-4">枚</span>
+                        <span className="text-slate-400 text-xs font-bold">枚</span>
                       </div>
                     </div>
                   ))}
                 </div>
-                <div className="mt-6 pt-4 border-t border-gray-100 flex justify-between items-center bg-gray-50 p-3 rounded-xl">
-                  <span className="text-sm text-gray-600 font-bold">準備金合計</span>
-                  <span className="text-xl font-black text-gray-800">¥{startCashTotal.toLocaleString()}</span>
+                <div className="mt-5 pt-3 border-t border-slate-100 flex justify-between items-center bg-slate-50 p-3 rounded-xl">
+                  <span className="text-xs text-slate-600 font-bold">準備金合計</span>
+                  <span className="text-lg font-black text-slate-800">¥{startCashTotal.toLocaleString()}</span>
                 </div>
               </div>
 
-              <div className="bg-indigo-50 p-6 rounded-2xl shadow-sm border border-indigo-100">
-                <h3 className="font-black text-indigo-900 mb-4 flex items-center border-b border-indigo-200/50 pb-3">
-                  <span className="bg-indigo-600 text-white text-xs px-2.5 py-1 rounded-md mr-3 shadow-sm">Step 2</span> レジ内の現金
+              {/* Step 2: 終了時実測 */}
+              <div className="bg-indigo-50/70 p-5 rounded-2xl shadow-xs border border-indigo-100">
+                <h3 className="font-black text-indigo-950 mb-4 flex items-center border-b border-indigo-200/50 pb-3 text-sm">
+                  <span className="bg-indigo-600 text-white text-xs px-2 py-0.5 rounded mr-2">Step 2</span> 現在のレジ内現金（実測）
                 </h3>
-                <div className="space-y-3">
+                <div className="space-y-2.5">
                   {moneyTypes.map(item => (
-                    <div key={`end-${item.key}`} className="flex items-center justify-between">
-                      <label className="text-sm font-bold w-16 text-indigo-800">{item.label}</label>
+                    <div key={`end-${item.key}`} className="flex items-center justify-between text-sm">
+                      <label className="font-bold text-indigo-900">{item.label}</label>
                       <div className="flex items-center space-x-2">
                         <input 
                           type="number" min="0" 
                           value={endCounts[item.key] !== undefined ? endCounts[item.key] : ''} 
-                          onChange={(e) => handleEndChange(item.key, e.target.value)}
+                          onChange={(e) => handleCountChange(setEndCounts, endCounts, item.key, e.target.value)}
                           placeholder="0"
-                          className="w-16 p-1.5 border-2 border-indigo-200 rounded-lg text-right focus:border-indigo-500 focus:ring-0 outline-none font-black text-indigo-900 bg-white shadow-sm" 
+                          className="w-20 p-1.5 border-2 border-indigo-200 rounded-lg text-right focus:border-indigo-500 outline-none font-black text-indigo-900 bg-white" 
                         />
-                        <span className="text-indigo-400 text-xs font-bold w-4">枚</span>
+                        <span className="text-indigo-400 text-xs font-bold">枚</span>
                       </div>
                     </div>
                   ))}
                 </div>
-                <div className="mt-6 pt-4 border-t border-indigo-200/50 flex justify-between items-center bg-white p-3 rounded-xl shadow-sm">
-                  <span className="text-sm text-indigo-800 font-bold">入力合計</span>
-                  <span className="text-xl font-black text-indigo-700">¥{endCashTotal.toLocaleString()}</span>
+                <div className="mt-5 pt-3 border-t border-indigo-200/50 flex justify-between items-center bg-white p-3 rounded-xl shadow-xs">
+                  <span className="text-xs text-indigo-800 font-bold">実測合計</span>
+                  <span className="text-lg font-black text-indigo-700">¥{endCashTotal.toLocaleString()}</span>
                 </div>
               </div>
 
-              <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm flex flex-col justify-between">
+              {/* Step 3: 照合結果 */}
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
                 <div>
-                  <h3 className="font-black text-gray-800 mb-5 border-b border-gray-100 pb-3 text-lg">最終照合結果</h3>
-                  <div className="space-y-4">
-                    <div className="flex justify-between text-gray-500 font-bold text-sm items-center">
-                      <span>① 準備金合計</span>
-                      <span className="text-gray-800">¥{startCashTotal.toLocaleString()}</span>
+                  <h3 className="font-black text-slate-800 mb-4 border-b border-slate-100 pb-3 text-base">最終照合結果</h3>
+                  <div className="space-y-2.5 text-xs sm:text-sm">
+                    <div className="flex justify-between text-slate-500 font-bold">
+                      <span>① つり銭準備金</span>
+                      <span className="text-slate-800 font-black">¥{startCashTotal.toLocaleString()}</span>
                     </div>
-                    <div className="flex justify-between text-gray-500 font-bold text-sm items-center border-b border-dashed border-gray-200 pb-4">
-                      <span>② 本日の売上 <span className="bg-gray-100 px-1.5 py-0.5 rounded text-[10px] ml-1">{salesCount}件</span></span>
-                      <span className="text-emerald-600">+ ¥{totalSales.toLocaleString()}</span>
+                    <div className="flex justify-between text-slate-500 font-bold">
+                      <span>② レジ総売上 (グロス)</span>
+                      <span className="text-slate-800 font-black">+ ¥{salesMetrics.grossSales.toLocaleString()}</span>
                     </div>
-                    <div className="pt-2">
-                      <div className="flex justify-between font-bold text-gray-500 text-xs mb-1">あるべき現金</div>
-                      <div className="flex justify-between font-black text-gray-800 text-2xl tracking-tight">
+                    <div className="flex justify-between text-rose-600 font-bold border-b border-dashed border-slate-200 pb-2.5">
+                      <span>③ 返金・取消総額 (出金)</span>
+                      <span className="font-black">- ¥{salesMetrics.totalRefunded.toLocaleString()}</span>
+                    </div>
+
+                    <div className="pt-1">
+                      <div className="text-[11px] font-bold text-slate-400">理論上のレジ内現金 (① + ② - ③)</div>
+                      <div className="flex justify-between font-black text-slate-800 text-xl mt-0.5">
                         <span>理論値</span>
                         <span>¥{expectedCash.toLocaleString()}</span>
                       </div>
                     </div>
-                    <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100">
-                      <div className="flex justify-between font-bold text-indigo-500 text-xs mb-1">実際の現金 (Step2)</div>
-                      <div className="flex justify-between font-black text-indigo-700 text-2xl tracking-tight">
+
+                    <div className="bg-indigo-50 p-3 rounded-xl border border-indigo-100">
+                      <div className="text-[11px] font-bold text-indigo-500">実際のレジ内現金 (実測)</div>
+                      <div className="flex justify-between font-black text-indigo-700 text-xl mt-0.5">
                         <span>実測値</span>
                         <span>¥{endCashTotal.toLocaleString()}</span>
                       </div>
@@ -868,18 +2017,22 @@
                   </div>
                 </div>
                 
-                <div className={`mt-6 p-5 rounded-2xl text-center shadow-inner border-2 ${
-                  difference === 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-600 border-red-200'
+                <div className={`mt-5 p-4 rounded-2xl text-center border-2 ${
+                  difference === 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-600 border-rose-200'
                 }`}>
                   {difference === 0 ? (
                     <div className="flex flex-col items-center justify-center">
-                      <Check size={32} className="mb-2 text-emerald-500" /> 
-                      <span className="font-black text-lg">誤差なし！完璧です</span>
+                      <Check size={28} className="mb-1 text-emerald-500" /> 
+                      <span className="font-black text-base">誤差なし！ピッタリ一致</span>
+                      <span className="text-[11px] text-emerald-600 mt-0.5 font-bold">売上と返金・出金が完璧に合致しています</span>
                     </div>
                   ) : (
                     <div className="flex flex-col items-center">
-                      <div className="flex items-center text-sm mb-2 font-bold opacity-80"><AlertCircle size={18} className="mr-1.5" /> 違算が発生しています</div>
-                      <span className="text-3xl font-black tracking-tight">{difference > 0 ? '+' : ''}{difference.toLocaleString()} 円</span>
+                      <div className="flex items-center text-xs mb-1 font-bold"><AlertCircle size={15} className="mr-1" /> レジ現金に過不足が発生しています</div>
+                      <span className="text-2xl sm:text-3xl font-black">{difference > 0 ? '+' : ''}{difference.toLocaleString()} 円</span>
+                      <span className="text-[11px] text-rose-500 mt-1 font-bold">
+                        {difference > 0 ? '（現金が多い：お釣りの渡し忘れ等）' : '（現金が足りない：返金控え忘れやお釣りの渡しすぎ等）'}
+                      </span>
                     </div>
                   )}
                 </div>
@@ -890,192 +2043,653 @@
       );
     }
 
-    function SettingsTab({ items, setItems, staff, setStaff, goalAmount, setGoalAmount }) {
+    function SettingsTab({
+      items, setItems, staff, setStaff, goalAmount, setGoalAmount,
+      luckyConfig, setLuckyConfig, salesHistory, setSalesHistory,
+      startCashCounts, setStartCashCounts, endCashCounts, setEndCashCounts, showToast
+    }) {
+      const [newStaffName, setNewStaffName] = useState('');
+      const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+      const fileInputRef = useRef(null);
+
       const handleAddItem = () => {
-        const newItem = { id: Date.now(), name: '', price: '', stock: '', category: '', flavors: [], image: null };
+        const newItem = {
+          id: Date.now() + Math.floor(Math.random() * 1000),
+          name: '',
+          price: 300,
+          stock: 50,
+          category: 'フード',
+          flavors: [],
+          _rawFlavors: '',
+          image: null
+        };
         setItems([...items, newItem]);
       };
+
       const handleRemoveItem = (id) => setItems(items.filter(item => item.id !== id));
       
       const updateItemField = (id, field, value) => {
         setItems(items.map(item => {
           if (item.id === id) {
-            if (field === 'flavors_str') return { ...item, flavors: value.split(',').map(s => s.trim()).filter(Boolean), _rawFlavors: value };
+            if (field === 'flavors_str') {
+              const parsed = value.split(/[,、]/).map(s => s.trim()).filter(Boolean);
+              return { ...item, flavors: parsed, _rawFlavors: value };
+            }
             return { ...item, [field]: value };
           }
           return item;
         }));
       };
 
-      const handleImageUpload = (id, event) => {
+      const handleImageUpload = async (id, event) => {
         const file = event.target.files[0];
-        if (file) {
-          const reader = new FileReader();
-          reader.onloadend = () => updateItemField(id, 'image', reader.result);
-          reader.readAsDataURL(file);
+        if (!file) return;
+        try {
+          const compressedDataUrl = await compressImageFile(file, 240, 0.75);
+          updateItemField(id, 'image', compressedDataUrl);
+          showToast('商品画像を設定しました', 'success');
+        } catch (err) {
+          showToast('画像の読み込みに失敗しました', 'error');
         }
       };
 
-      const [newStaffName, setNewStaffName] = useState('');
+      // 予算シミュレーター(festival_incomes)からの引き継ぎ
+      const handleImportFromBudgetStorage = () => {
+        const savedIncomes = safeStorage.get('festival_incomes');
+        if (!savedIncomes || !Array.isArray(savedIncomes) || savedIncomes.length === 0) {
+          showToast('ブラウザ内に予算シミュレーターのデータが見つかりません。JSON読込をお試しください。', 'error');
+          return;
+        }
+        const validIncomes = savedIncomes.filter(inc => inc.name && inc.name.trim() !== '');
+        if (validIncomes.length === 0) {
+          showToast('予算シミュレーターに有効な商品名が登録されていません', 'error');
+          return;
+        }
+        const converted = validIncomes.map((inc, idx) => ({
+          id: Date.now() + idx,
+          name: inc.name.trim(),
+          price: Number(inc.price) || 0,
+          stock: Number(inc.quantity) || 50,
+          category: 'フード',
+          flavors: [],
+          _rawFlavors: '',
+          image: null
+        }));
+        const sumGoal = converted.reduce((s, i) => s + (i.price * i.stock), 0);
+        setItems(converted);
+        if (sumGoal > 0) setGoalAmount(sumGoal);
+        showToast(`予算シミュレーターから ${converted.length} 件の商品と目標売上を引き継ぎました！`, 'success');
+      };
+
+      // バックアップJSONの保存
+      const handleExportBackupJSON = () => {
+        const payload = {
+          type: 'festival_pos_backup',
+          version: '3.1',
+          exportedAt: new Date().toISOString(),
+          items,
+          salesHistory,
+          staff,
+          goalAmount,
+          startCashCounts,
+          endCashCounts,
+          luckyConfig
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `学祭POSバックアップ_${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast('バックアップファイル(.json)を保存しました', 'success');
+      };
+
+      // JSONファイルの読込（POSバックアップと予算シミュレーターJSONの両対応）
+      const handleImportJSONFile = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          try {
+            const data = JSON.parse(ev.target.result);
+            if (Array.isArray(data.items)) {
+              setItems(data.items);
+              if (Array.isArray(data.salesHistory)) setSalesHistory(data.salesHistory);
+              if (Array.isArray(data.staff)) setStaff(data.staff);
+              if (typeof data.goalAmount === 'number') setGoalAmount(data.goalAmount);
+              if (data.startCashCounts) setStartCashCounts({ ...EMPTY_CASH_COUNTS, ...data.startCashCounts });
+              if (data.endCashCounts) setEndCashCounts({ ...EMPTY_CASH_COUNTS, ...data.endCashCounts });
+              if (data.luckyConfig) setLuckyConfig(data.luckyConfig);
+              showToast('POSバックアップデータを復元しました！', 'success');
+            } else if (Array.isArray(data.incomes)) {
+              const converted = data.incomes
+                .filter(inc => inc.name && inc.name.trim() !== '')
+                .map((inc, idx) => ({
+                  id: Date.now() + idx,
+                  name: inc.name.trim(),
+                  price: Number(inc.price) || 0,
+                  stock: Number(inc.quantity) || 50,
+                  category: 'フード',
+                  flavors: [],
+                  _rawFlavors: '',
+                  image: null
+                }));
+              const sumGoal = converted.reduce((s, i) => s + (i.price * i.stock), 0);
+              setItems(converted);
+              if (sumGoal > 0) setGoalAmount(sumGoal);
+              showToast(`予算シミュレーターJSONから ${converted.length} 件の商品をインポートしました！`, 'success');
+            } else {
+              showToast('未対応のJSONファイルです', 'error');
+            }
+          } catch (err) {
+            showToast('ファイルの読み込みに失敗しました', 'error');
+          }
+          e.target.value = '';
+        };
+        reader.readAsText(file);
+      };
+
       const handleAddStaff = () => {
-        if (newStaffName.trim() && !staff.includes(newStaffName.trim())) {
-          setStaff([...staff, newStaffName.trim()]);
+        const trimmed = newStaffName.trim();
+        if (trimmed && !staff.includes(trimmed)) {
+          setStaff([...staff, trimmed]);
           setNewStaffName('');
         }
       };
-      const handleRemoveStaff = (index) => setStaff(staff.filter((_, i) => i !== index));
-      const updateStaffName = (index, newName) => {
-        const updated = [...staff];
-        updated[index] = newName;
-        setStaff(updated);
+
+      const handleResetAll = () => {
+        safeStorage.remove(STORAGE_KEY);
+        setItems([]);
+        setSalesHistory([]);
+        setStaff([]);
+        setGoalAmount(50000);
+        setStartCashCounts(EMPTY_CASH_COUNTS);
+        setEndCashCounts(EMPTY_CASH_COUNTS);
+        setLuckyConfig({ enabled: true, interval: 10, triggeredMilestones: [] });
+        setResetConfirmOpen(false);
+        showToast('すべてのデータを初期化しました', 'info');
       };
 
       return (
-        <div className="p-4 md:p-6 h-full overflow-y-auto bg-gray-50 pb-24 md:pb-6">
-          <div className="max-w-6xl mx-auto">
-            <h2 className="text-2xl font-black mb-6 flex items-center text-gray-800 tracking-tight"><Settings className="mr-3 text-indigo-600" size={28}/> 設定・管理</h2>
+        <div className="p-4 md:p-6 h-full overflow-y-auto bg-slate-50 pb-24 md:pb-10">
+          <input type="file" accept=".json" ref={fileInputRef} onChange={handleImportJSONFile} className="hidden" />
+          <div className="max-w-6xl mx-auto space-y-6">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <h2 className="text-2xl font-black flex items-center text-slate-800 tracking-tight">
+                <Settings className="mr-2.5 text-indigo-600" size={26}/> 設定・商品・データ管理
+              </h2>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={handleImportFromBudgetStorage}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-2 rounded-xl text-xs font-black flex items-center shadow-xs transition-colors active:scale-95"
+                >
+                  <Sparkles size={15} className="mr-1.5" /> 予算ツールから商品を引き継ぐ
+                </button>
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 px-3.5 py-2 rounded-xl text-xs font-black flex items-center shadow-xs transition-colors active:scale-95"
+                >
+                  <Upload size={15} className="mr-1.5" /> JSON読込 (予算/POS)
+                </button>
+                <button
+                  onClick={handleExportBackupJSON}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-2 rounded-xl text-xs font-black flex items-center shadow-xs transition-colors active:scale-95"
+                >
+                  <Download size={15} className="mr-1.5" /> バックアップ保存
+                </button>
+                <button
+                  onClick={() => setResetConfirmOpen(true)}
+                  className="bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 px-3.5 py-2 rounded-xl text-xs font-black flex items-center transition-colors active:scale-95"
+                >
+                  <RefreshCw size={14} className="mr-1" /> 全初期化
+                </button>
+              </div>
+            </div>
             
-            <div className="grid md:grid-cols-2 gap-6 mb-8">
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-                <h3 className="font-black text-gray-800 mb-4 flex items-center"><Target size={20} className="mr-2 text-indigo-500"/> 目標売上設定</h3>
-                <div className="flex items-center space-x-4">
-                  <div className="relative flex-1">
-                    <span className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 font-bold">¥</span>
-                    <input 
-                      type="number" value={goalAmount} onChange={(e) => setGoalAmount(Number(e.target.value))}
-                      className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white font-black text-xl outline-none transition-all"
-                    />
-                  </div>
+            <div className="grid md:grid-cols-3 gap-6">
+              <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200">
+                <h3 className="font-black text-slate-800 mb-3 flex items-center text-sm">
+                  <Target size={18} className="mr-2 text-indigo-500"/> 目標売上金額
+                </h3>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-black">¥</span>
+                  <input 
+                    type="number" value={goalAmount} onChange={(e) => setGoalAmount(Number(e.target.value) || 0)}
+                    className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white font-black text-lg outline-none"
+                  />
                 </div>
-                <p className="text-xs text-gray-400 mt-3 font-bold">※ダッシュボードの進捗メーターに反映されます</p>
+                <p className="text-[11px] text-slate-400 mt-2 font-bold">※ヘッダーと集計画面の進捗バーに連動します</p>
               </div>
 
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-                <h3 className="font-black text-gray-800 mb-4 flex items-center"><User size={20} className="mr-2 text-indigo-500"/> スタッフ管理</h3>
-                <div className="flex space-x-2 mb-4">
+              <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200">
+                <div className="flex justify-between items-center mb-3">
+                  <h3 className="font-black text-slate-800 flex items-center text-sm">
+                    <Trophy size={18} className="mr-2 text-amber-500"/> キリ番ラッキー演出
+                  </h3>
+                  <label className="inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={luckyConfig.enabled}
+                      onChange={(e) => setLuckyConfig({ ...luckyConfig, enabled: e.target.checked })}
+                      className="sr-only peer"
+                    />
+                    <div className="w-10 h-5 bg-slate-200 rounded-full peer peer-checked:bg-indigo-600 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all relative"></div>
+                  </label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <span className="text-xs font-bold text-slate-600">会計</span>
+                  <input
+                    type="number"
+                    min="1"
+                    disabled={!luckyConfig.enabled}
+                    value={luckyConfig.interval}
+                    onChange={(e) => setLuckyConfig({ ...luckyConfig, interval: Math.max(1, Number(e.target.value) || 10) })}
+                    className="w-20 p-2 bg-slate-50 border border-slate-200 rounded-xl text-center font-black text-base outline-none disabled:opacity-50"
+                  />
+                  <span className="text-xs font-bold text-slate-600">組ごとに祝福演出</span>
+                </div>
+              </div>
+
+              <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200">
+                <h3 className="font-black text-slate-800 mb-3 flex items-center text-sm">
+                  <User size={18} className="mr-2 text-indigo-500"/> レジ担当スタッフ登録
+                </h3>
+                <div className="flex space-x-2 mb-3">
                   <input 
                     type="text" value={newStaffName} onChange={(e) => setNewStaffName(e.target.value)}
-                    placeholder="例: 山田太郎" className="flex-1 p-3 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all"
+                    onKeyDown={(e) => e.key === 'Enter' && handleAddStaff()}
+                    placeholder="例: 佐藤 / A班"
+                    className="flex-1 p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500"
                   />
-                  <button onClick={handleAddStaff} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-3 rounded-xl text-sm font-bold whitespace-nowrap transition-colors shadow-sm">追加</button>
+                  <button onClick={handleAddStaff} className="bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-2 rounded-xl text-xs font-black whitespace-nowrap active:scale-95">追加</button>
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
                   {staff.map((s, idx) => (
-                    <div key={idx} className="flex items-center bg-gray-50 border border-gray-200 rounded-lg overflow-hidden group">
-                      <input 
-                        value={s} onChange={(e) => updateStaffName(idx, e.target.value)}
-                        className="p-2 px-3 w-24 text-sm font-bold text-gray-700 bg-transparent outline-none focus:bg-white"
-                      />
-                      <button onClick={() => handleRemoveStaff(idx)} className="bg-gray-100 hover:bg-red-500 text-gray-400 hover:text-white p-2.5 transition-colors">
-                        <X size={14} />
+                    <div key={idx} className="flex items-center bg-slate-100 rounded-lg px-2.5 py-1 text-xs font-bold text-slate-700">
+                      <span>{s}</span>
+                      <button onClick={() => setStaff(staff.filter((_, i) => i !== idx))} className="ml-1.5 text-slate-400 hover:text-rose-500">
+                        <X size={13} />
                       </button>
                     </div>
                   ))}
+                  {staff.length === 0 && <span className="text-xs text-slate-400 font-bold">スタッフ未登録</span>}
                 </div>
               </div>
             </div>
 
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+            {/* 商品メニュー設定テーブル */}
+            <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-3">
                 <div>
-                  <h3 className="font-black text-gray-800 flex items-center text-lg"><ShoppingCart size={20} className="mr-2 text-indigo-500"/> 商品メニュー設定</h3>
-                  <p className="text-xs text-gray-400 mt-1 font-bold">レジ画面にリアルタイムで反映されます</p>
+                  <h3 className="font-black text-slate-800 flex items-center text-base">
+                    <ShoppingCart size={20} className="mr-2 text-indigo-500"/> 商品メニュー・在庫設定
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5 font-bold">
+                    種類・味は「ソース、塩」のように読点（、）またはカンマ（,）区切りで設定できます
+                  </p>
                 </div>
-                <button onClick={handleAddItem} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-xl text-sm font-bold flex items-center transition-colors shadow-sm w-full sm:w-auto justify-center">
-                  <Plus size={18} className="mr-1" /> 新規商品を追加
-                </button>
+                <div className="flex gap-2 w-full sm:w-auto">
+                  {items.length === 0 && (
+                    <button
+                      onClick={() => { setItems(SAMPLE_ITEMS); showToast('サンプル商品を追加しました', 'success'); }}
+                      className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3.5 py-2 rounded-xl text-xs font-black flex items-center justify-center flex-1 sm:flex-initial"
+                    >
+                      サンプル読込
+                    </button>
+                  )}
+                  <button onClick={handleAddItem} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-xs font-black flex items-center justify-center flex-1 sm:flex-initial shadow-xs active:scale-95">
+                    <Plus size={16} className="mr-1" /> 商品を追加
+                  </button>
+                </div>
               </div>
               
-              <div className="overflow-x-auto rounded-xl border border-gray-200">
-                <table className="w-full text-left text-sm whitespace-nowrap">
-                  <thead className="bg-gray-50 text-gray-500 border-b border-gray-200 uppercase text-xs tracking-wider">
+              <div className="overflow-x-auto rounded-xl border border-slate-200">
+                <table className="w-full text-left text-xs sm:text-sm whitespace-nowrap">
+                  <thead className="bg-slate-50 text-slate-500 border-b border-slate-200 text-xs">
                     <tr>
-                      <th className="p-4 w-16 text-center font-bold">画像</th>
-                      <th className="p-4 w-48 font-bold">商品名</th>
-                      <th className="p-4 w-32 font-bold">カテゴリ</th>
-                      <th className="p-4 w-28 font-bold">価格 (円)</th>
-                      <th className="p-4 w-28 font-bold">在庫数</th>
-                      <th className="p-4 font-bold">種類/味 (カンマ区切り)</th>
-                      <th className="p-4 w-12 text-center font-bold">削除</th>
+                      <th className="p-3 w-14 text-center font-bold">画像</th>
+                      <th className="p-3 w-44 font-bold">商品名</th>
+                      <th className="p-3 w-28 font-bold">カテゴリ</th>
+                      <th className="p-3 w-24 font-bold">単価 (円)</th>
+                      <th className="p-3 w-24 font-bold">現在庫</th>
+                      <th className="p-3 font-bold">種類・味（、または , 区切り）</th>
+                      <th className="p-3 w-12 text-center font-bold">削除</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-100">
+                  <tbody className="divide-y divide-slate-100">
                     {items.map(item => (
-                      <tr key={item.id} className="hover:bg-indigo-50/30 transition-colors">
-                        <td className="p-3 text-center">
-                          <label className="cursor-pointer block relative flex justify-center">
+                      <tr key={item.id} className="hover:bg-indigo-50/20">
+                        <td className="p-2.5 text-center">
+                          <label className="cursor-pointer inline-flex justify-center">
                             {item.image ? (
                               <div className="relative group">
-                                <img src={item.image} alt="preview" className="w-12 h-12 object-cover rounded-xl border border-gray-200 shadow-sm" />
+                                <img src={item.image} alt="preview" className="w-11 h-11 object-cover rounded-xl border border-slate-200" />
                                 <div className="absolute inset-0 bg-black/50 rounded-xl flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                  <Edit2 size={14} className="text-white" />
+                                  <Edit2 size={13} className="text-white" />
                                 </div>
                               </div>
                             ) : (
-                              <div className="w-12 h-12 bg-gray-50 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center text-gray-400 hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-400 transition-colors">
-                                <Plus size={18} />
+                              <div className="w-11 h-11 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl flex items-center justify-center text-slate-400 hover:border-indigo-400 hover:text-indigo-500">
+                                <Plus size={16} />
                               </div>
                             )}
                             <input type="file" accept="image/*" className="hidden" onChange={(e) => handleImageUpload(item.id, e)} />
                           </label>
                         </td>
-                        <td className="p-3">
+                        <td className="p-2.5">
                           <input 
                             type="text" value={item.name} onChange={(e) => updateItemField(item.id, 'name', e.target.value)}
                             placeholder="例: 焼きそば"
-                            className="w-full p-2.5 bg-gray-50 border border-transparent rounded-lg font-bold text-gray-800 focus:bg-white focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 outline-none transition-all"
+                            className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-bold text-slate-800 focus:bg-white focus:border-indigo-400 outline-none"
                           />
                         </td>
-                        <td className="p-3">
+                        <td className="p-2.5">
                           <input 
                             type="text" value={item.category} onChange={(e) => updateItemField(item.id, 'category', e.target.value)}
                             placeholder="例: フード"
-                            className="w-full p-2.5 bg-gray-50 border border-transparent rounded-lg text-gray-600 font-bold focus:bg-white focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 outline-none transition-all"
+                            className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-bold focus:bg-white focus:border-indigo-400 outline-none"
                           />
                         </td>
-                        <td className="p-3">
+                        <td className="p-2.5">
                           <input 
                             type="number" min="0" value={item.price} onChange={(e) => updateItemField(item.id, 'price', e.target.value === '' ? '' : Number(e.target.value))}
-                            placeholder="0"
-                            className="w-full p-2.5 bg-gray-50 border border-transparent rounded-lg text-right font-black text-indigo-700 focus:bg-white focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 outline-none transition-all"
+                            placeholder="400"
+                            className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-right font-black text-indigo-700 focus:bg-white focus:border-indigo-400 outline-none"
                           />
                         </td>
-                        <td className="p-3">
+                        <td className="p-2.5">
                           <input 
                             type="number" min="0" value={item.stock} onChange={(e) => updateItemField(item.id, 'stock', e.target.value === '' ? '' : Number(e.target.value))}
-                            placeholder="0"
-                            className={`w-full p-2.5 bg-gray-50 border border-transparent rounded-lg text-right font-black outline-none transition-all focus:bg-white focus:ring-2 ${item.stock !== '' && item.stock <= 0 ? 'text-red-600 focus:border-red-300 focus:ring-red-100' : 'text-gray-700 focus:border-indigo-300 focus:ring-indigo-100'}`}
+                            placeholder="50"
+                            className={`w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-right font-black outline-none focus:bg-white ${
+                              item.stock !== '' && Number(item.stock) <= 0 ? 'text-rose-600 border-rose-300' : 'text-slate-800'
+                            }`}
                           />
                         </td>
-                        <td className="p-3">
+                        <td className="p-2.5">
                           <input 
                             type="text" 
-                            value={item._rawFlavors !== undefined ? item._rawFlavors : (item.flavors ? item.flavors.join(', ') : '')} 
+                            value={item._rawFlavors !== undefined ? item._rawFlavors : (item.flavors ? item.flavors.join('、') : '')} 
                             onChange={(e) => updateItemField(item.id, 'flavors_str', e.target.value)}
-                            placeholder="例: ソース, 塩, 激辛"
-                            className="w-full p-2.5 bg-gray-50 border border-transparent rounded-lg text-gray-600 font-bold focus:bg-white focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100 outline-none transition-all"
+                            placeholder="例: ソース、塩、激辛"
+                            className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-bold focus:bg-white focus:border-indigo-400 outline-none"
                           />
                         </td>
-                        <td className="p-3 text-center">
-                          <button onClick={() => handleRemoveItem(item.id)} className="p-2.5 text-gray-400 hover:text-white hover:bg-red-500 rounded-lg transition-colors">
-                            <Trash2 size={18} />
+                        <td className="p-2.5 text-center">
+                          <button onClick={() => handleRemoveItem(item.id)} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors">
+                            <Trash2 size={16} />
                           </button>
                         </td>
                       </tr>
                     ))}
                     {items.length === 0 && (
-                      <tr><td colSpan="7" className="p-8 text-center text-gray-400 font-bold bg-gray-50">商品がありません。「新規商品を追加」ボタンから追加してください。</td></tr>
+                      <tr><td colSpan="7" className="p-8 text-center text-slate-400 font-bold bg-slate-50/50">商品を追加してください</td></tr>
                     )}
                   </tbody>
                 </table>
               </div>
             </div>
           </div>
+
+          {/* 全初期化確認モーダル */}
+          {resetConfirmOpen && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-[9999] p-4">
+              <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl animate-fade-in-up">
+                <div className="flex items-center text-rose-600 mb-3">
+                  <AlertCircle size={26} className="mr-2" />
+                  <h3 className="text-lg font-black">全データの初期化</h3>
+                </div>
+                <p className="text-xs text-slate-600 font-bold leading-relaxed mb-6">
+                  登録商品、売上履歴、スタッフ、レジ締め入力などすべてのデータを消去して初期化します。よろしいですか？
+                </p>
+                <div className="flex gap-3">
+                  <button onClick={() => setResetConfirmOpen(false)} className="flex-1 py-3 bg-slate-100 text-slate-700 rounded-xl font-bold text-sm">キャンセル</button>
+                  <button onClick={handleResetAll} className="flex-1 py-3 bg-rose-600 text-white rounded-xl font-black text-sm shadow-md">初期化する</button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       );
     }
 
-    // --- Reactをマウント ---
+    function HelpManualModal({ onClose }) {
+      const [manualTab, setManualTab] = useState('quick');
+
+      return (
+        <div className="fixed inset-0 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center z-[10000] p-3 sm:p-5">
+          <div className="bg-white rounded-3xl w-full max-w-3xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden animate-fade-in-up border border-slate-200">
+            {/* モーダルヘッダー */}
+            <div className="bg-indigo-600 text-white p-4 sm:p-5 flex justify-between items-center shrink-0">
+              <div className="flex items-center space-x-2.5">
+                <BookOpen size={24} className="text-amber-300" />
+                <div>
+                  <h3 className="text-lg sm:text-xl font-black">学祭POS取扱説明書</h3>
+                  <p className="text-xs text-indigo-100 font-bold">誰でもわかる！当日のレジ操作・返金・締め作業マニュアル</p>
+                </div>
+              </div>
+              <button 
+                onClick={onClose}
+                className="p-2 bg-white/10 hover:bg-white/20 rounded-full text-white transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* マニュアル切り替えタブ */}
+            <div className="flex border-b border-slate-200 bg-slate-50 px-3 pt-2 gap-1 overflow-x-auto shrink-0">
+              {[
+                { id: 'quick', label: '① 基本のレジ会計' },
+                { id: 'refund', label: '② 返金・取消のやり方' },
+                { id: 'close', label: '③ レジ締め・現金確認' },
+                { id: 'data', label: '④ 予算連携・データ管理' },
+              ].map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => setManualTab(t.id)}
+                  className={`px-3.5 py-2.5 font-black text-xs rounded-t-xl transition-all whitespace-nowrap ${
+                    manualTab === t.id 
+                      ? 'bg-white text-indigo-700 border-t-2 border-indigo-600 shadow-xs' 
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            {/* マニュアル本文 */}
+            <div className="p-4 sm:p-6 overflow-y-auto space-y-4 text-xs sm:text-sm text-slate-700 leading-relaxed">
+              {manualTab === 'quick' && (
+                <div className="space-y-4">
+                  <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-4">
+                    <h4 className="font-black text-indigo-900 text-sm mb-1 flex items-center">
+                      <Calculator size={18} className="mr-1.5 text-indigo-600"/> レジの基本的な流れ（3ステップ）
+                    </h4>
+                    <p className="text-xs text-indigo-700 font-bold">混雑時でもスマートにお釣りを間違えずにお会計できます！</p>
+                  </div>
+
+                  <div className="grid sm:grid-cols-3 gap-3">
+                    <div className="bg-white border border-slate-200 rounded-xl p-3.5 space-y-1.5 shadow-2xs">
+                      <div className="w-6 h-6 rounded-full bg-indigo-600 text-white font-black text-xs flex items-center justify-center">1</div>
+                      <div className="font-black text-slate-800 text-xs sm:text-sm">商品をタップして追加</div>
+                      <p className="text-slate-500 text-xs">商品をタップするとカートに入ります。味がある商品は選択ポップアップが出ます。</p>
+                    </div>
+                    <div className="bg-white border border-slate-200 rounded-xl p-3.5 space-y-1.5 shadow-2xs">
+                      <div className="w-6 h-6 rounded-full bg-indigo-600 text-white font-black text-xs flex items-center justify-center">2</div>
+                      <div className="font-black text-slate-800 text-xs sm:text-sm">数量確認 ＆ お会計へ</div>
+                      <p className="text-slate-500 text-xs">カート内の「＋」「ー」で個数調整。値引きがある場合は「値引きを追加」から適用します。</p>
+                    </div>
+                    <div className="bg-white border border-slate-200 rounded-xl p-3.5 space-y-1.5 shadow-2xs">
+                      <div className="w-6 h-6 rounded-full bg-indigo-600 text-white font-black text-xs flex items-center justify-center">3</div>
+                      <div className="font-black text-slate-800 text-xs sm:text-sm">お預かり金額を入力</div>
+                      <p className="text-slate-500 text-xs">「ぴったり」や「+1,000」などのクイックボタン、またはテンキーでお預かり金額を入力し「確定」を押します。</p>
+                    </div>
+                  </div>
+
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-900">
+                    <span className="font-black">💡 お釣りの渡し間違い防止テクニック：</span><br/>
+                    1,000円札を2枚預かったときは「¥2,000」ボタン、5,000円札なら「¥5,000」ボタンを押すだけで、お釣りが自動計算されて緑色で大きく表示されます。
+                  </div>
+                </div>
+              )}
+
+              {manualTab === 'refund' && (
+                <div className="space-y-4">
+                  <div className="bg-rose-50 border border-rose-100 rounded-2xl p-4">
+                    <h4 className="font-black text-rose-900 text-sm mb-1 flex items-center">
+                      <RotateCcw size={18} className="mr-1.5 text-rose-600"/> 返金・注文取消（トラブル即応）
+                    </h4>
+                    <p className="text-xs text-rose-700 font-bold">「打ち間違えた！」「やっぱり1個キャンセルで」に完全対応しています。</p>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="border border-slate-200 rounded-xl p-3.5 bg-white">
+                      <div className="font-black text-slate-800 mb-1 flex items-center text-xs sm:text-sm">
+                        <span className="bg-amber-500 text-white text-[10px] px-2 py-0.5 rounded font-black mr-2">即座に対応</span>
+                        直前の会計を取り消したいとき
+                      </div>
+                      <p className="text-xs text-slate-600">
+                        レジ画面の上部に「<strong>直前取引を取り消す / 返金</strong>」黄色バーが常時表示されています。タブを移動することなく、その場で1タップで取消画面を開けます。
+                      </p>
+                    </div>
+
+                    <div className="border border-slate-200 rounded-xl p-3.5 bg-white">
+                      <div className="font-black text-slate-800 mb-1 flex items-center text-xs sm:text-sm">
+                        <span className="bg-indigo-600 text-white text-[10px] px-2 py-0.5 rounded font-black mr-2">一部返品</span>
+                        「3個買ったうちの1個だけ返品」したいとき
+                      </div>
+                      <p className="text-xs text-slate-600">
+                        返金モーダルで「<strong>一部商品の返品・部分返金</strong>」を選択します。返品したい商品の横にある「＋」を押して返品個数を指定すると、その商品代金のみが正確に返金計算されます。
+                      </p>
+                    </div>
+
+                    <div className="border border-slate-200 rounded-xl p-3.5 bg-white">
+                      <div className="font-black text-slate-800 mb-1 flex items-center text-xs sm:text-sm">
+                        <span className="bg-emerald-600 text-white text-[10px] px-2 py-0.5 rounded font-black mr-2">重要</span>
+                        「商品の在庫を元に戻す」スイッチの選び方
+                      </div>
+                      <ul className="text-xs text-slate-600 list-disc list-inside mt-1 space-y-1">
+                        <li><strong>ON（戻す）：</strong> レジの打ち間違い、未開封で再販できるキャンセル。</li>
+                        <li><strong>OFF（戻さない）：</strong> お客さんが落として破損したため返金した、焦がして破棄したなどの食品ロス時。</li>
+                      </ul>
+                    </div>
+
+                    <div className="border border-slate-200 rounded-xl p-3.5 bg-white">
+                      <div className="font-black text-slate-800 mb-1 flex items-center text-xs sm:text-sm">
+                        <span className="bg-slate-700 text-white text-[10px] px-2 py-0.5 rounded font-black mr-2">復元</span>
+                        間違えて取り消してしまった場合
+                      </div>
+                      <p className="text-xs text-slate-600">
+                        集計タブの履歴で取消済み取引（薄い赤色）の「取消済（詳細/復元）」を押すと、「<strong>この取引を取り消し解除（復元）する</strong>」ボタンから元通りの売上・在庫に戻せます。
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {manualTab === 'close' && (
+                <div className="space-y-4">
+                  <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-4">
+                    <h4 className="font-black text-indigo-900 text-sm mb-1 flex items-center">
+                      <ClipboardCheck size={18} className="mr-1.5 text-indigo-600"/> レジ締め・現金照合の手順
+                    </h4>
+                    <p className="text-xs text-indigo-700 font-bold">1日の終わり、またはシフト交代時の現金チェック手順です。</p>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="bg-white border border-slate-200 rounded-xl p-3.5">
+                      <div className="font-black text-slate-800 text-xs sm:text-sm mb-1">
+                        <span className="bg-slate-800 text-white text-[10px] px-2 py-0.5 rounded mr-1.5">Step 1</span>
+                        開店時の「つり銭準備金」を入力しておく
+                      </div>
+                      <p className="text-xs text-slate-600">
+                        最初に金庫に入れた小銭・千円札の枚数を入力します（例: 1,000円×10枚、100円×50枚など）。
+                      </p>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-xl p-3.5">
+                      <div className="font-black text-slate-800 text-xs sm:text-sm mb-1">
+                        <span className="bg-indigo-600 text-white text-[10px] px-2 py-0.5 rounded mr-1.5">Step 2</span>
+                        営業終了時にレジ内の現金を数えて入力する
+                      </div>
+                      <p className="text-xs text-slate-600">
+                        金庫・キャッシュトレイの中にあるお金を金種ごとに数えて枚数を入力します。
+                      </p>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-xl p-3.5">
+                      <div className="font-black text-slate-800 text-xs sm:text-sm mb-1">
+                        <span className="bg-emerald-600 text-white text-[10px] px-2 py-0.5 rounded mr-1.5">Step 3</span>
+                        照合結果を確認する（誤差判定）
+                      </div>
+                      <p className="text-xs text-slate-600">
+                        システムが自動で「<strong>準備金 ＋ 総売上 − 返金出金額 ＝ あるべき現金（理論値）</strong>」を計算します。
+                        実測値と一致していれば「誤差なし！ピッタリ一致」と表示されます。
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {manualTab === 'data' && (
+                <div className="space-y-4">
+                  <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4">
+                    <h4 className="font-black text-emerald-900 text-sm mb-1 flex items-center">
+                      <Sparkles size={18} className="mr-1.5 text-emerald-600"/> 予算ツール連携 ＆ バックアップ
+                    </h4>
+                    <p className="text-xs text-emerald-700 font-bold">データはブラウザに自動保存されますが、ファイルとして安全に保管・共有できます。</p>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="bg-white border border-slate-200 rounded-xl p-3.5">
+                      <div className="font-black text-slate-800 text-xs sm:text-sm mb-1">
+                        ✨ 予算シミュレーターから商品を引き継ぐ
+                      </div>
+                      <p className="text-xs text-slate-600">
+                        同じブラウザで「学園祭予算シミュレーター」を使用していた場合、「設定」タブの「<strong>予算ツールから商品を引き継ぐ</strong>」を押すだけで、商品名・単価・想定個数が一瞬でインポートされます。
+                      </p>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-xl p-3.5">
+                      <div className="font-black text-slate-800 text-xs sm:text-sm mb-1">
+                        💾 バックアップ保存 ＆ 他の端末への移行
+                      </div>
+                      <p className="text-xs text-slate-600">
+                        「<strong>バックアップ保存</strong>」を押すと、設定・商品・売上履歴がまとまった <code>.json</code> ファイルがダウンロードされます。別のスマホやタブレットで「JSON読込」から開けば、同じ状態を復元できます。
+                      </p>
+                    </div>
+
+                    <div className="bg-white border border-slate-200 rounded-xl p-3.5">
+                      <div className="font-black text-slate-800 text-xs sm:text-sm mb-1">
+                        📊 CSVエクスポート
+                      </div>
+                      <p className="text-xs text-slate-600">
+                        集計タブから「<strong>CSV出力</strong>」を押すと、Excelでそのまま開ける形式（UTF-8 BOM付き）で全会計履歴・返金理由・担当スタッフ別データを出力できます。学祭後の反省会や会計報告書にそのまま使えます。
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* モーダルフッター */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end shrink-0">
+              <button
+                onClick={onClose}
+                className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs sm:text-sm rounded-xl shadow-xs transition-colors active:scale-95"
+              >
+               閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     const root = ReactDOM.createRoot(document.getElementById('root'));
     root.render(<App />);
   </script>
